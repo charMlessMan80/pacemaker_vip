@@ -61,8 +61,8 @@ Abréviations de sources :
 
 - **Règle** : lancer `ansible*` **depuis la racine du dépôt**, sans `ANSIBLE_CONFIG`,
   dans un répertoire qui n'est pas accessible en écriture à tous. Vérifier par
-  `ansible-config dump --only-changed` (ligne `CONFIG_FILE()`). La garde automatique
-  est posée en L2.
+  `ansible-config dump --only-changed` (ligne `CONFIG_FILE()`). Garde automatique :
+  G1 du preflight, qui vérifie `ansible_config_file` et les réglages effectifs.
 - **Raison** : `AC/config/manager.py:212-248`. L'ordre de recherche est
   `ANSIBLE_CONFIG`, puis `./ansible.cfg` (ignoré si le CWD est world-writable,
   l.226-232), puis `~/.ansible.cfg`, puis `/etc/ansible/ansible.cfg`. Le premier
@@ -81,9 +81,13 @@ Abréviations de sources :
 ## 6. Le play cible exactement les 2 nœuds — `--limit` interdit
 
 - **Règle** : le play porte sur le groupe `pacemaker_nodes`, qui contient exactement
-  2 hôtes. Il ne s'exécute jamais avec `--limit`, ni avec un nœud injoignable. Une
-  garde est prévue en L2 : nombre d'hôtes égal à 2, `ansible_play_hosts ==
-  ansible_play_hosts_all`, `any_errors_fatal`.
+  2 hôtes. Il ne s'exécute jamais avec `--limit`, ni avec un nœud injoignable.
+  Garde G6 du preflight : `ansible_limit` non défini, et `ansible_play_hosts_all`
+  égal à `groups['pacemaker_nodes']` ; plus `any_errors_fatal`.
+- **Piège** : comparer `ansible_play_hosts` à `ansible_play_hosts_all` ne détecte
+  pas `--limit`, car `ansible_play_hosts_all` est lui aussi réduit
+  (`AC/plugins/strategy/__init__.py:274`, `AC/inventory/manager.py:388-389,404-407`,
+  repro L2, F-26).
 - **Raison** : le rôle construit corosync.conf à partir de `ansible_play_hosts`
   (`LSR/tasks/shell_pcs/check-and-prepare-role-variables.yml:9`,
   `LSR/tasks/shell_pcs/pcs-cluster-setup-pcs-0.10.yml:14-15`). Avec un seul hôte dans
@@ -169,3 +173,25 @@ Abréviations de sources :
   de branche, position par rapport à origin).
 - **Raison** : le fichier de faits est le tableau de bord de ce qui est prouvé. Il
   ne doit refléter que des résultats obtenus.
+
+## 14. Preflight en tête de tout playbook qui touche les nœuds
+
+- **Règle 14.1** : tout playbook qui modifie les nœuds commence par
+  `import_playbook: preflight.yml`. Le rôle `pacemaker_preflight` y est appelé avec
+  `tags: always`.
+  - **Raison** : les gardes contrôleur tournent sur `localhost`. Avec
+    `inventory = /dev/null`, un play sur `pacemaker_nodes` sans `-i` ne trouve aucun
+    hôte et se termine sans erreur (R-03). Quand le play 1 échoue, le play 2 ne
+    s'exécute pas (repro L2, F-34). `include_tasks` avec `apply: tags: [always]`
+    garde les gardes actives sous `--tags` et `--skip-tags` (repro L2, F-31).
+- **Règle 14.2** : une garde ne teste jamais une variable de gabarit lue via
+  `hostvars` avec `is defined` ou `default()`. Elle teste la variable source.
+  - **Raison** : `hostvars` rend les valeurs avec `fail_on_undefined=False`
+    (`AC/vars/hostvars.py:140`). Si la source manque, la valeur reste le texte brut
+    `"{{ … }}"` et `is defined` vaut vrai (repro L2, F-27).
+- **Règle 14.3** : une garde qui dépend d'un code retour vérifie aussi la sortie
+  quand l'outil renvoie 0 sans avoir fait le test.
+  - **Raison** : `arping -D` sort en 0 sur une interface sans ARP
+    (iputils-20210202 `arping.c:562-570,1006-1009`, repro L2, F-29).
+- **Règle 14.4** : chaque garde est démontrée dans les deux sens, nominal et échec
+  forcé, avec le message obtenu. Les inventaires de test vivent hors du dépôt.

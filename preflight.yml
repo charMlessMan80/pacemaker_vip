@@ -1,0 +1,38 @@
+---
+# Preflight du projet pacemaker_vip : gardes bloquantes, en lecture seule.
+# Ne configure rien. À lancer depuis la racine du dépôt :
+#   ansible-playbook -i inventories/<env> preflight.yml --ask-vault-pass
+# Le playbook cluster (L3) l'importera en tête (import_playbook).
+#
+# Play 1 sur localhost : gardes contrôleur, inventaire et variables. Il doit
+# s'exécuter même quand l'inventaire est oublié : avec inventory = /dev/null
+# (ansible.cfg), un play sur pacemaker_nodes ne trouverait aucun hôte et
+# s'achèverait sans erreur (R-03).
+# Play 2 sur pacemaker_nodes : gardes nœuds, en lecture seule.
+#
+# tags: always : --tags / --skip-tags ne sautent pas le preflight (seul
+# --skip-tags always le ferait).
+
+- name: Preflight contrôleur, inventaire et variables
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - role: pacemaker_preflight
+      pacemaker_preflight_stage: controller
+      tags:
+        - always
+
+- name: Preflight nœuds (lecture seule)
+  hosts: pacemaker_nodes
+  gather_facts: true
+  any_errors_fatal: true
+  # arping exige CAP_NET_RAW, et le rôle ha_cluster s'exécutera de toute
+  # façon en root : le preflight vérifie aussi que l'élévation fonctionne.
+  become: true
+  roles:
+    - role: pacemaker_preflight
+      pacemaker_preflight_stage: nodes
+      tags:
+        - always

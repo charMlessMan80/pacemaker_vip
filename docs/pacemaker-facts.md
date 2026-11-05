@@ -14,6 +14,9 @@ ce que git sait déjà.
 | **pcs** | ClusterLabs/pcs tag `v0.11.11` |
 | **corosync** | corosync/corosync tag `v3.1.10` |
 | **RA** | ClusterLabs/resource-agents tag `v4.10.0` (amont ; le RPM OL9 contient des correctifs rétroportés) |
+| **pcs-src** | archive GitHub `pcs-0.11.11.tar.gz`, sha256 `4d3577571aab01a8c2b44c1ad18a0a61363a4a7957ad461c4a73e4afd2d6d6b2` |
+| **corosync-src** | archive GitHub `corosync-3.1.10.tar.gz`, sha256 `03c55b984380bdb68ecd8d0f9cb1f9f0c2a7e6e7b7f437becc33e9a804018340` |
+| **iputils** | archive GitHub `iputils-20210202.tar.gz` (sha256 `3f557ecfd2ace873801231d2c1f42de73ced9fbc1ef3a438d847688b5fb0e8ab`), `arping.c` ; page de manuel `arping.8` extraite du RPM OL9 `iputils-20210202-15.0.1.el9_7` (sha256 `ff498fa2625d945dde3b50f88e367d794c1f6b628da30d8e0885aac5df9f703e`) |
 
 **Types de preuve**
 
@@ -21,6 +24,7 @@ ce que git sait déjà.
 |---|---|
 | repoquery | `dnf repoquery` exécuté le 2026-11-05 sur `https://yum.oracle.com/repo/OracleLinux/OL9/{baseos/latest,appstream,addons}/x86_64/` |
 | repro locale | conteneur `docker.io/library/oraclelinux:9` (Oracle Linux 9.8) avec le RPM `ansible-core-2.14.18-3.el9_8.1` et `python3-3.9.25-7.0.1.el9_8.2`. **Ce n'est ni le contrôleur ni un nœud.** |
+| repro conteneur (L2) | contrôleur = repro locale + `python3-netaddr-0.10.1-3.el9` + `podman-remote` ; 2 nœuds `oraclelinux:9` avec systemd, NetworkManager et sudo (pv-n1 192.0.2.11/24, pv-n2 192.0.2.12/24, réseau podman 192.0.2.0/24, RFC 5737), connexion `containers.podman.podman` 1.21.2. Dépôts : yum.oracle.com le 2026-11-05. **Ni le contrôleur, ni les nœuds, ni Hyper-V.** |
 
 Statuts : **PROUVÉ** (lu dans un artefact cité) ou **À VÉRIFIER : où**.
 
@@ -59,7 +63,7 @@ Statuts : **PROUVÉ** (lu dans un artefact cité) ou **À VÉRIFIER : où**.
 
 | ID | Fait | Source | Statut |
 |---|---|---|---|
-| F-17 | **ol9_addons** : `pacemaker-2.1.10-3.0.1.el9_8`, `pcs-0.11.11-2.el9_8.1`, `corosync-3.1.10-1.el9_8.2`, `corosync-qnetd/qdevice-3.0.4-1.el9`, `libknet1-plugins-all-1.28-1.el9`, `resource-agents-4.10.0-111.el9_8.19`, `sbd-1.5.2-1.el9`. **ol9_appstream** : `fence-agents-all-4.10.0-110.el9_8.8`, `fence-virt-4.10.0-110.el9_8.8`, `python3-netaddr-0.10.1-3.el9`. **ol9_baseos_latest** : `openssl`. Doc Oracle : `dnf config-manager --enable ol9_appstream ol9_baseos_latest ol9_addons`. | repoquery ; https://docs.oracle.com/en/operating-systems/oracle-linux/9/availability/availability-EnablingAccesstothePacemakerandCorosyncPackages.html | PROUVÉ ; contenu du miroir interne À VÉRIFIER (§6) |
+| F-17 | **ol9_addons** : `pacemaker-2.1.10-3.0.1.el9_8`, `pcs-0.11.11-2.el9_8.1`, `corosync-3.1.10-1.el9_8.2`, `corosync-qnetd/qdevice-3.0.4-1.el9`, `libknet1-plugins-all-1.28-1.el9`, `resource-agents-4.10.0-111.el9_8.19`, `sbd-1.5.2-1.el9`. **ol9_appstream** : `fence-agents-all-4.10.0-110.el9_8.8`, `fence-virt-4.10.0-110.el9_8.8`, `python3-netaddr-0.10.1-3.el9`. **ol9_baseos_latest** : `openssl`. Doc Oracle : `dnf config-manager --enable ol9_appstream ol9_baseos_latest ol9_addons`. **Correction L2** : `pacemaker` (>= 2.1.9) et `corosync` (>= 3.1.5) sont **aussi** dans ol9_appstream, et `openssl` aussi dans ol9_appstream. `pcs`, `corosync-qnetd`, `libknet1-plugins-all` et `resource-agents` ne sont **que** dans ol9_addons. Sans ol9_addons, il manque ces 4 paquets. L'image `oraclelinux:9` n'active pas ol9_addons. | repoquery ; https://docs.oracle.com/en/operating-systems/oracle-linux/9/availability/availability-EnablingAccesstothePacemakerandCorosyncPackages.html ; repro conteneur L2 (`dnf repoquery --available --qf '%{name}-%{version}-%{release} %{repoid}'`, avec et sans ol9_addons) | PROUVÉ ; contenu du miroir interne À VÉRIFIER (§6) |
 | F-18 | Aucun agent de fencing Hyper-V ou SCVMM, ni dans les dépôts OL9 (plus de 50 paquets `fence-agents-*`) ni en amont. | repoquery ; https://github.com/ClusterLabs/fence-agents/tree/main/agents | PROUVÉ |
 | F-24 | Hyper-V. VHD Set : « shared Virtual Disk model for guest clusters ». Pour les réservations persistantes, seule `Test-VHD -SupportPersistentReservations` en parle. Le support Linux d'un VHDX partagé avec réservations persistantes n'a pas été trouvé. Aucun watchdog Hyper-V trouvé. softdog : « It is not recommended to use such a configuration within a Production capacity » (Red Hat) ; « As a fall-back, you can use the softdog module » (man sbd). | https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/manage/create-vhdset-file ; https://learn.microsoft.com/en-us/powershell/module/hyper-v/test-vhd ; https://access.redhat.com/articles/2800691 ; https://raw.githubusercontent.com/ClusterLabs/sbd/main/man/sbd.8.pod.in | PROUVÉ (pour référence ; D2 écarte le fencing) |
 | F-25 | « Red Hat does not support clusters when fencing is disabled, as it is not suitable for a production environment. » Oracle désactive le fencing dans son exemple OL9 : « For simplicity, it is disabled in this example », avec `pcs property set stonith-enabled=false`. | Red Hat RHEL 9 HA (copie Wayback, URL F-16) ; https://docs.oracle.com/en/operating-systems/oracle-linux/9/availability/OL9-AVAILABILITY.pdf | PROUVÉ |
@@ -72,6 +76,20 @@ Statuts : **PROUVÉ** (lu dans un artefact cité) ou **À VÉRIFIER : où**.
 | F-21 | `inventory =` vide est résolu en chemin relatif au `.cfg` : la racine du dépôt devient l'inventaire. Sans la ligne, c'est `/etc/ansible/hosts`. Avec `/dev/null`, l'inventaire est vide. `-i` remplace la valeur du cfg. | `AC/config/base.yml:729-740` ; repro locale L1 (3 cas, plus `--graph` avec `-i`) | PROUVÉ |
 | F-22 | `collections_path` (singulier) est valable depuis 2.10. `collections_paths` est encore lue en 2.14.18, sans dépréciation émise (simple TODO). Les chemins relatifs du `.cfg` sont résolus depuis le répertoire du fichier. `collections_scan_sys_path` vaut `true` par défaut, et `sys.path` est alors ajouté **après** les chemins configurés. | `AC/config/base.yml:194-222` ; `AC/config/manager.py:77-78` ; `AC/utils/path.py:49-52` ; `AC/utils/collection_loader/_collection_finder.py:94-98` ; repro L1 (`COLLECTIONS_PATHS(/repo/ansible.cfg) = ['/repo/collections']`) | PROUVÉ |
 | F-23 | `no_target_syslog` est transmis comme `_ansible_no_log` au module, ce qui positionne `AnsibleModule.no_log`. Cela saute `_log_invocation` et `log()`. C'est son seul usage côté module, qui ne masque pas les résultats. Repro L1 avec rsyslog local : la ligne « Invoked with stdin=SECRET… » est présente sans l'option, et absente avec l'option, que ce soit via le cfg ou via `ANSIBLE_NO_TARGET_SYSLOG`. **Limite** : l'option n'agit pas sur l'affichage de `invocation` côté contrôleur en `-vvv`. | `AC/config/base.yml:922-934` ; `AC/plugins/action/__init__.py:969-970` ; `AC/module_utils/common/parameters.py:93` ; `AC/module_utils/basic.py:526-527,1311` ; `AC/plugins/callback/__init__.py:234-235` ; repro locale L1 (rsyslog, sans journald) | PROUVÉ ; comportement avec journald sur les nœuds À VÉRIFIER (§6) |
+
+### Preflight (L2)
+
+| ID | Fait | Source | Statut |
+|---|---|---|---|
+| F-26 | `--limit` réduit **aussi** `ansible_play_hosts_all` : `get_hosts()` est appelé avec `ignore_restrictions=True`, mais sans `ignore_limits`. Comparer `ansible_play_hosts` à `ansible_play_hosts_all` ne détecte donc pas `--limit`. `ansible_limit` est défini dès que `--limit` est passé. `groups` n'est pas réduit. `ANSIBLE_LIMIT` n'existe pas en 2.14.18. Sous `--limit` sans `localhost`, un play `hosts: localhost` est sauté (« skipping: no hosts matched »). | `AC/plugins/strategy/__init__.py:274` ; `AC/vars/manager.py:487,496-501` ; `AC/inventory/manager.py:388-389,404-407` ; `AC/utils/vars.py:211-230` ; `AC/constants.py:110` ; `AC/cli/arguments/option_helpers.py:289` ; repro locale L2 (`--limit h1` donne `ansible_play_hosts_all = [h1]`, `groups` = 2 hôtes ; `ANSIBLE_LIMIT=h1,h2` laisse `ansible_limit` non défini) | PROUVÉ |
+| F-27 | Lue via `hostvars`, une variable dont le gabarit pointe vers une variable absente vaut le **texte brut** `"{{ vault_pacemaker_hacluster_password }}"`. Dans ce cas, `is defined` vaut `true` et `default()` ne s'applique pas. Sur l'hôte lui-même, `is defined` vaut `false` et `default()` s'applique. Une variable `null` est `defined` (`is none` vrai), et `null \| string` donne `"None"`. | `AC/vars/hostvars.py:138-141` (`fail_on_undefined=False`) ; repro locale L2 (`/work/exp/exp.yml`) | PROUVÉ |
+| F-28 | Le nom de cluster passé à `pcs cluster setup --corosync_conf`, que le rôle appelle sans `--force`, doit respecter trois règles. Il est non vide. Il correspond à `^[a-zA-Z0-9_-]{0,32}$` (la règle vient de GFS2, mais elle est bloquante sans `--force`). Il ne contient ni `{`, ni `}`, ni `\n`, ni `\r`. corosync 3.1.10 ne documente aucune contrainte de caractères : le nom sert à dériver un identifiant. | `pcs-src pcs/lib/corosync/config_validators.py:57-91,276-293` ; `pcs/lib/validate.py:596-626` ; `pcs/lib/commands/cluster.py:506,611-618` ; `pcs/cluster.py:1800-1804` ; `LSR/tasks/shell_pcs/pcs-cluster-setup-pcs-0.10.yml:3-13` (sans `--force`) ; `corosync-src man/corosync.conf.5:338-340`, `exec/totemconfig.c:946-973` | PROUVÉ (code) |
+| F-29 | `arping -D` (iputils-20210202, OL9) émet ses sondes avec la source 0.0.0.0. Il renvoie 0 sans réponse et 1 si l'adresse répond. **Piège** : sur une interface sans ARP (`lo`, NOARP), il renvoie 0 sans rien envoyer (« Interface "lo" is not ARPable »). Interface inexistante : rc 2. Il faut être root : `getcap /usr/bin/arping` est vide, et sous `nobody` on obtient « arping: socket: Operation not permitted », rc 2. | `iputils arping.c:300-301,562-570,822-824,1006-1009` ; `arping.8` (RPM OL9) ; repro conteneur L2 (adresse libre : rc 0 « Received 0 response(s) » ; adresse prise : rc 1 ; `-I lo` : rc 0 ; `-I nope0` : rc 2) | PROUVÉ |
+| F-30 | Une IPv4 posée hors NetworkManager (`ip addr add`, ou configuration de podman) apparaît en `GENERAL.STATE = 100 (connected (externally))`, avec un profil généré **`ipv4.method = manual`**. La méthode seule ne prouve donc pas qu'une IP est statique et gérée. Un profil créé par `nmcli` et activé donne `100 (connected)`. | repro conteneur L2 (`nmcli --get-values GENERAL.CONNECTION,GENERAL.STATE device show`, `ipv4.method`) | PROUVÉ (repro) ; comportement sur les VM Hyper-V À VÉRIFIER (§6) |
+| F-31 | `include_tasks` avec `apply: {tags: [always]}`, dans un rôle appelé avec `tags: always`, exécute les tâches incluses sous `--tags foo` et sous `--skip-tags foo`. | repro locale L2 (rôle jetable, puis `preflight.yml` en nominal sous `--tags foo` et `--skip-tags foo` : rc=0, toutes les gardes exécutées) | PROUVÉ (repro) |
+| F-32 | La clé de fait d'une interface remplace `-` par `_` (`pv-dum0` → `ansible_facts['pv_dum0']`). La liste `ansible_facts['interfaces']` garde le nom réel. | `AC/module_utils/facts/namespace.py:41,49-51` ; `AC/module_utils/facts/network/linux.py:283-288` (`:` → `_`) ; repro conteneur L2 | PROUVÉ |
+| F-33 | Avec `any_errors_fatal: true`, un nœud injoignable pendant la collecte des faits arrête le play pour tous les hôtes (« NO MORE HOSTS LEFT »), avant toute tâche du rôle. | `AC/plugins/strategy/linear.py:350-368` ; repro conteneur L2 (pv-n2 arrêté) | PROUVÉ |
+| F-34 | Quand le play 1 (`localhost`) échoue, le play 2 ne s'exécute pas. | repro locale L2 (`-i inventories/example` : échec en G7, play nœuds absent du journal) | PROUVÉ (repro) |
 
 ## 2. Versions épinglées
 
@@ -87,7 +105,7 @@ Fichier `collections/requirements.yml`. Le sha256 publié par l'API Galaxy a ét
 
 Les 4 dépendances n'ont aucune dépendance transitive (`metadata.dependencies = {}`, API Galaxy). Repro L1 : `ansible-galaxy collection install -r collections/requirements.yml -p collections` installe exactement ces 5 versions et rien d'autre.
 
-`requirements.yml` ne permet pas d'imposer un sha256 en 2.14. Le contrôle d'intégrité des tarballs reste manuel. À VÉRIFIER en L2 si une garde est souhaitée.
+`requirements.yml` ne permet pas d'imposer un sha256 en 2.14. Le contrôle d'intégrité des tarballs reste manuel. Le preflight (G4) compare les **versions** installées (`MANIFEST.json`) à `requirements.yml`, pas les sha256 (P-13).
 
 ## 3. Décisions
 
@@ -106,22 +124,26 @@ Les 4 dépendances n'ont aucune dépendance transitive (`metadata.dependencies =
 | ID | Risque | Garde prévue | Livrable |
 |---|---|---|---|
 | R-01 | Dépendances Galaxy incompatibles installées sans avertissement (F-03). | Épinglage `==` de toutes les collections, plus `collections_on_ansible_version_mismatch = error` (repro L1 : `ERROR! Collection community.general does not support Ansible version 2.14.18`, rc=1). | **L1 (fait)** |
-| R-02 | `ansible.cfg` du projet non lu (CWD, `ANSIBLE_CONFIG`, répertoire world-writable) : la configuration du contrôleur s'applique (F-20). | Assertion sur `ansible_config_file` égal au cfg du dépôt. | L2 |
-| R-03 | Inventaire oublié : avec `/dev/null`, le play ne trouve aucun hôte et se termine sans rien faire. Une garde placée sur `hosts: pacemaker_nodes` **ne s'exécuterait pas**. | Garde sur `localhost` : `groups['pacemaker_nodes']` existe et contient exactement 2 hôtes. | L2 |
-| R-04 | Play partiel (`--limit`, nœud injoignable) : corosync.conf à 1 nœud, puis redémarrage (F-06). | `ansible_play_hosts == ansible_play_hosts_all`, nombre égal à 2, `any_errors_fatal`. | L2 / L3 |
-| R-05 | `enable_repos` sans effet sur OL9 (F-04). | `ha_cluster_enable_repos: false` explicite, plus une vérification préalable de la disponibilité des paquets. | L2 / L3 |
+| R-02 | `ansible.cfg` du projet non lu (CWD, `ANSIBLE_CONFIG`, répertoire world-writable) : la configuration du contrôleur s'applique (F-20). | G1 : `ansible_config_file` = cfg du dépôt, et réglages effectifs non écrasés par `ANSIBLE_*`. | **L2 (fait)** |
+| R-03 | Inventaire oublié : avec `/dev/null`, le play ne trouve aucun hôte et se termine sans rien faire. Une garde placée sur `hosts: pacemaker_nodes` **ne s'exécuterait pas**. | G5 sur `localhost` : `groups['pacemaker_nodes']` existe et contient exactement 2 hôtes. | **L2 (fait)** |
+| R-04 | Play partiel (`--limit`, nœud injoignable) : corosync.conf à 1 nœud, puis redémarrage (F-06). | G6 : `ansible_limit` non défini sur les 2 plays, et `ansible_play_hosts_all` = `groups['pacemaker_nodes']` sur le play nœuds. La comparaison prévue au L0 (`ansible_play_hosts == ansible_play_hosts_all`) **ne détecte pas `--limit`** (F-26). Plus `any_errors_fatal` (F-33). | **L2 (fait)** ; L3 : `import_playbook: preflight.yml` |
+| R-05 | `enable_repos` sans effet sur OL9 (F-04). | N6 : paquets disponibles dans les dépôts activés (**L2, fait**) ; `ha_cluster_enable_repos: false` explicite (L3). | L2 / L3 |
 | R-06 | `stonith-enabled` absent : la VIP ne démarre jamais, alors que le rôle termine en succès (F-11). | Propriété déclarée (D2), plus un contrôle après exécution que la VIP est « Started ». | L3 |
 | R-07 | Ressources ou propriétés manuelles purgées à chaque passage (F-07). | Tout déclarer ; comparer le CIB avant et après. | L3 |
-| R-08 | IPaddr2 avec `nic` et `cidr_netmask` fournis : aucune vérification de sous-réseau. Sans `nic` : choix automatique de l'interface (F-14). | Vérifier sur le contrôleur que la VIP appartient au réseau de l'IPv4 de `pacemaker_vip_nic` (faits Ansible). | L2 |
-| R-09 | `ipaddr` renvoie `False` ou `/32` sans erreur (F-19). | Exiger un résultat non faux, la présence d'un `/` dans l'entrée et un préfixe égal à celui de l'interface. | L2 |
+| R-08 | IPaddr2 avec `nic` et `cidr_netmask` fournis : aucune vérification de sous-réseau. Sans `nic` : choix automatique de l'interface (F-14). | N2 (interface, IPv4 statique) et N3 (même réseau, même préfixe), sur les faits des nœuds. | **L2 (fait)** |
+| R-09 | `ipaddr` renvoie `False` ou `/32` sans erreur (F-19). | G8 : `/` obligatoire, octets et préfixe (1 à 30) vérifiés par expression régulière, recoupés par `ansible.utils.ipv4`, ni réseau ni broadcast ; N3 : préfixe égal à celui de l'interface. | **L2 (fait)** |
 | R-10 | `manage_firewall: true` réactive firewalld ; `manage_selinux` est sauté si firewalld est arrêté (F-15). | Ces variables restent explicitement à `false` ; assertion sur leur valeur. | L3 |
 | R-11 | Mot de passe hacluster journalisé sur la cible (F-13). | `no_target_syslog = True` (repro L1). | **L1 (fait)** |
 | R-12 | Mot de passe affiché côté contrôleur en `-vvv` (F-23, limite). | Contre-mesure à établir (P-07). | L3 |
 | R-13 | Une modification de corosync.conf ou des clés arrête les 2 nœuds à la fois, et le rôle termine en succès (F-08). | Passage `--check --diff` d'abord, fenêtre de maintenance (CLAUDE.md §9). | L3 (procédure) |
-| R-14 | Nom de cluster par défaut `my-cluster` (`LSR/defaults/main.yml:28`). | `pacemaker_cluster_name` non vide et différent de `my-cluster`. | L2 |
+| R-14 | Nom de cluster par défaut `my-cluster` (`LSR/defaults/main.yml:28`). | G7 : `pacemaker_cluster_name` non vide, différent de `my-cluster`, conforme à pcs (F-28). | **L2 (fait)** |
 | R-15 | Test d'idempotence naïf faussé : `changed` vaut toujours vrai (F-09). | Test portant sur l'état. | L3 |
 | R-16 | `collections_scan_sys_path` actif : une collection hors `./collections` serait trouvée dans `sys.path` (F-22). | `collections_scan_sys_path = False`. | **L1 (fait)** |
-| R-17 | Variables de l'exemple chargées depuis un mauvais emplacement, sans erreur. | `group_vars/` à côté de `hosts.yml` ; chargement démontré par `ansible-inventory --host` (repro L1). Les variables nulles doivent faire échouer le preflight. | L1 (fait) / L2 |
+| R-17 | Variables de l'exemple chargées depuis un mauvais emplacement, sans erreur. | `group_vars/` à côté de `hosts.yml` ; chargement démontré par `ansible-inventory --host` (repro L1). Les variables nulles font échouer le preflight en G7 (repro L2). | **L1 / L2 (fait)** |
+| R-18 | Garde sur une variable de gabarit via `hostvars` : `is defined` vrai alors que la source Vault manque (F-27). | G10 teste `vault_pacemaker_hacluster_password`, puis l'égalité `pacemaker_hacluster_password == vault_…`. Les valeurs contenant `{{`/`{%` sont refusées (G9, G10). | **L2 (fait)** |
+| R-19 | `arping -D` renvoie 0 sans test sur une interface sans ARP (F-29). | N5 exige aussi « Sent N probes » (N >= 1) et « Received 0 response ». | **L2 (fait)** |
+| R-20 | Preflight sauté par `--skip-tags always`. | Aucune garde technique possible : la consigne d'exploitation est de ne jamais l'utiliser (README). | ouvert |
+| R-21 | N6 lance `dnf repoquery`, qui peut rafraîchir le cache des métadonnées dnf du nœud (écriture dans `/var/cache/dnf`, sans changer la configuration). | Écart accepté et signalé (README, `nodes.yml`). | L2 (signalé) |
 
 ## 5. Points ouverts
 
@@ -144,8 +166,13 @@ Les 4 dépendances n'ont aucune dépendance transitive (`metadata.dependencies =
 | P-08 | Filtrage ARP/MAC du vSwitch Hyper-V (basculement de la VIP) : interlocuteur et réglages. |
 | P-09 | Compatibilité réelle du rôle 1.88.9 avec pcs 0.11.11 et pacemaker 2.1.10 : **lue dans le code, jamais testée**. |
 | P-10 | Variables `ANSIBLE_*` présentes dans l'environnement du contrôleur : elles priment sur `ansible.cfg`. |
-| P-11 | Présence de `python3-netaddr` sur le contrôleur (requis en L2). |
-| P-12 | Contenu du miroir interne : ol9_addons, ol9_appstream et ol9_baseos_latest (F-17). |
+| P-11 | Présence de `python3-netaddr` >= 0.10.1 sur le contrôleur. G3 le vérifie et échoue sinon ; à constater au premier lancement. |
+| P-12 | Contenu du miroir interne : ol9_addons, ol9_appstream et ol9_baseos_latest (F-17). N6 le vérifie et échoue sinon ; à constater au premier lancement. |
+| P-13 | Faut-il contrôler les sha256 des tarballs de collections (§2) ? G4 ne contrôle que les versions. |
+| P-14 | Licence du dépôt : `meta/main.yml` porte `license: "À VÉRIFIER"`. |
+| P-15 | Accès aux nœuds : utilisateur distant et `sudo` (le play nœuds est en `become: true`). |
+| P-16 | IP de la VIP sur les vrais nœuds : NetworkManager présent, profil actif `100 (connected)` en `ipv4.method manual` (F-30) ; `arping -D` sur le vSwitch Hyper-V (F-29, P-08). Non validable hors cible. |
+| P-17 | Décisions L2 à valider : VIP en /31 ou /32 refusée (G8) ; `pacemaker_vip_nic` identique sur les 2 nœuds (un seul paramètre `nic` IPaddr2) ; N6 exige les paquets dans les dépôts activés même s'ils sont déjà installés. |
 
 ## 6. Commandes à lancer (hors portée de la machine de développement)
 
@@ -160,6 +187,7 @@ ansible-config dump --only-changed          # CONFIG_FILE() = <racine>/ansible.c
 ansible-galaxy collection install -r collections/requirements.yml -p collections
 ansible-galaxy collection list              # collections hors ./collections (information)
 ansible-galaxy collection list -p collections
+ansible-playbook -i inventories/<env> preflight.yml --ask-vault-pass   # L2 : rc=0 attendu
 ```
 
 ### Sur chaque nœud
@@ -173,6 +201,10 @@ sed -n '213,244p' /usr/lib/ocf/lib/heartbeat/findif.sh     # comparer à RA v4.1
 systemctl is-enabled firewalld; getenforce
 getent hosts <nom_nœud_1> <nom_nœud_2>
 ls -l /dev/watchdog*; wdctl                                 # information (F-24)
+nmcli --escape no --get-values GENERAL.CONNECTION,GENERAL.STATE device show <nic>   # 100 (connected) (F-30)
+nmcli --escape no --get-values ipv4.method connection show <profil>                 # manual
+sudo arping -D -c 2 -I <nic> <VIP>          # rc 0 + « Received 0 response(s) » (F-29)
+dnf --quiet repoquery --available --queryformat '%{name}' pcs corosync-qnetd openssl corosync libknet1-plugins-all resource-agents pacemaker fence-agents-all fence-virt
 ```
 
 ### Après un premier déploiement (sur un nœud)
@@ -190,3 +222,4 @@ journalctl --since today | grep -c 'Invoked with'   # attendu 0 avec no_target_s
 |---|---|---|---|
 | L0 | 2026-11-05 | Résolution en lecture seule : faits Q1–Q9, sans code. | Faits F-01 à F-19, F-24, F-25. Repro locale (ipaddr, dépendances Galaxy, chargement des vars OL9). |
 | L1 | 2026-11-05 | Socle : CLAUDE.md, ce fichier, `collections/requirements.yml`, `ansible.cfg`, `.gitignore`, `inventories/example/`, README. | Repro locale : installation des 5 versions exactes ; mismatch → ERROR (et warning hors cfg) ; piège du cfg démontré ; `no_target_syslog` démontré (rsyslog) ; inventaire et group_vars chargés ; yamllint rc=0 ; ansible-lint rc=0 (profil production, ansible-lint 26.11.0 / ansible-core 2.21.6, **pas** 2.14). Faits F-20 à F-23 ajoutés. |
+| L2 | 2026-11-05 | Preflight : `preflight.yml` et rôle `pacemaker_preflight` (gardes G1-G10, N1-N6), section README, CLAUDE.md §4, §6 (corrigé) et §14. | Repro locale et repro conteneur, sur ansible-core 2.14.18 : `--syntax-check` rc=0 ; chaque garde vérifiée en nominal et en échec forcé (77 cas, journaux hors dépôt) ; secret absent des sorties `-vvv` (0 occurrence) ; `inventories/example` échoue en G7. yamllint rc=0 ; ansible-lint rc=0 (profil production, ansible-lint 26.11.0 / ansible-core 2.21.6, **pas** 2.14). Faits F-26 à F-34 ajoutés, F-17 corrigé. |

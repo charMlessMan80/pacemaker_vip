@@ -1,0 +1,402 @@
+---
+# Gardes CONTRÔLEUR (G1-G4) et INVENTAIRE / VARIABLES (G5-G10).
+# Play sur localhost, connection: local. Aucune écriture : lectures de
+# fichiers du dépôt et une commande Python sans effet.
+#
+# Références : docs/pacemaker-facts.md (F-xx, R-xx), CLAUDE.md (§n).
+# AC = ansible-core 2.14.18, lib/ansible/.
+#
+# Les variables du projet sont portées par le groupe pacemaker_nodes : ce play
+# les lit via hostvars[<nœud>]. Piège établi en 2.14.18 : hostvars rend une
+# variable avec fail_on_undefined=False (AC/vars/hostvars.py:140). Une variable
+# dont le gabarit pointe vers une variable absente est donc renvoyée telle
+# quelle, sous forme de texte brut, et "is defined" vaut true. Les gardes
+# testent donc la variable source (G10) et refusent un texte qui contient
+# encore un gabarit.
+
+# ---------------------------------------------------------------- contrôleur
+
+# G1 (R-02, F-20). ansible_config_file = C.CONFIG_FILE
+# (AC/vars/manager.py:456), None si aucun fichier n'est trouvé.
+# playbook_dir = racine du dépôt (preflight.yml y est placé).
+- name: G1 | ansible.cfg lu est celui du dépôt
+  ansible.builtin.assert:
+    that:
+      - ansible_config_file is string
+      - >-
+        (ansible_config_file | realpath)
+        == ((playbook_dir ~ '/ansible.cfg') | realpath)
+    fail_msg: >-
+      ansible.cfg lu : {{ ansible_config_file | default('aucun', true) }} ;
+      attendu : {{ playbook_dir }}/ansible.cfg. Lancer ansible-playbook depuis
+      la racine du dépôt ({{ playbook_dir }}), sans ANSIBLE_CONFIG
+      (unset ANSIBLE_CONFIG), dans un répertoire non accessible en écriture à
+      tous (CLAUDE.md §4, AC/config/manager.py:212-248).
+    quiet: true
+
+# G1 (suite, P-10). Les variables ANSIBLE_* de l'environnement priment sur
+# ansible.cfg : le bon fichier peut être lu et ses réglages être écrasés.
+# Valeurs effectives lues par le lookup config (AC/plugins/lookup/config.py).
+# Variables d'environnement : AC/config/base.yml:194-233,922-934.
+- name: G1 | Réglages du dépôt effectifs (non écrasés par ANSIBLE_*)
+  ansible.builtin.assert:
+    that:
+      - >-
+        (pacemaker_preflight_cfg_paths | map('realpath') | list)
+        == [((playbook_dir ~ '/collections') | realpath)]
+      - pacemaker_preflight_cfg_scan is false
+      - pacemaker_preflight_cfg_mismatch == 'error'
+      - pacemaker_preflight_cfg_nts is true
+    fail_msg: >-
+      Réglages effectifs différents de {{ playbook_dir }}/ansible.cfg :
+      collections_path={{ pacemaker_preflight_cfg_paths }},
+      collections_scan_sys_path={{ pacemaker_preflight_cfg_scan }},
+      collections_on_ansible_version_mismatch={{
+      pacemaker_preflight_cfg_mismatch }},
+      no_target_syslog={{ pacemaker_preflight_cfg_nts }}.
+      Retirer de l'environnement ANSIBLE_COLLECTIONS_PATH,
+      ANSIBLE_COLLECTIONS_PATHS, ANSIBLE_COLLECTIONS_SCAN_SYS_PATH,
+      ANSIBLE_COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH et
+      ANSIBLE_NO_TARGET_SYSLOG (env | grep '^ANSIBLE_').
+    quiet: true
+  vars:
+    pacemaker_preflight_cfg_paths: >-
+      {{ query('ansible.builtin.config', 'COLLECTIONS_PATHS') | first }}
+    pacemaker_preflight_cfg_scan: >-
+      {{ query('ansible.builtin.config', 'COLLECTIONS_SCAN_SYS_PATH') | first }}
+    pacemaker_preflight_cfg_mismatch: >-
+      {{ query('ansible.builtin.config',
+      'COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH') | first }}
+    pacemaker_preflight_cfg_nts: >-
+      {{ query('ansible.builtin.config', 'DEFAULT_NO_TARGET_SYSLOG') | first }}
+
+# G2 (D1, F-01, F-02). Les épinglages de collections/requirements.yml sont
+# choisis pour ansible-core 2.14 (docs/pacemaker-facts.md §2).
+- name: G2 | ansible-core en 2.14.x
+  ansible.builtin.assert:
+    that:
+      - ansible_version.full is version('2.14.0', '>=')
+      - ansible_version.full is version('2.15.0', '<')
+    fail_msg: >-
+      ansible-core {{ ansible_version.full }} ; attendu 2.14.x (RPM
+      ol9_appstream ansible-core-2.14.18, décision D1). Les versions de
+      collections/requirements.yml sont choisies pour 2.14 : ne pas changer
+      d'ansible-core sans revoir ces épinglages (docs/pacemaker-facts.md §2).
+    quiet: true
+
+# G3 (F-19, P-11). Les filtres s'exécutent dans le processus ansible-playbook,
+# dont l'interpréteur est ansible_playbook_python = sys.executable
+# (AC/vars/manager.py:455). ansible.utils 4.1.0 requiert netaddr>=0.10.1
+# (AU/requirements.txt:5).
+- name: G3 | Lire la version de netaddr du Python du contrôleur
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -c
+      - import netaddr, sys; sys.stdout.write(netaddr.__version__)
+  register: pacemaker_preflight_netaddr
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: G3 | netaddr >= 0.10.1 importable
+  ansible.builtin.assert:
+    that:
+      - pacemaker_preflight_netaddr.rc == 0
+      - pacemaker_preflight_netaddr.stdout is version('0.10.1', '>=')
+    fail_msg: >-
+      netaddr {{ 'introuvable' if pacemaker_preflight_netaddr.rc != 0
+      else pacemaker_preflight_netaddr.stdout }} pour
+      {{ ansible_playbook_python }} ; requis >= 0.10.1 par ansible.utils 4.1.0.
+      Installer sur le contrôleur : dnf install python3-netaddr-0.10.1
+      (ol9_appstream, F-19). Sans netaddr, le filtre ipaddr échoue avec un
+      message qui cite à tort le nom d'hôte.
+    quiet: true
+
+# G4 (R-01, F-03). Versions lues dans les MANIFEST.json installés, comparées à
+# collections/requirements.yml (aucune liste recopiée ici). Le chemin
+# <dépôt>/collections est le seul chemin de collections (G1, suite).
+- name: G4 | Lire collections/requirements.yml
+  ansible.builtin.set_fact:
+    pacemaker_preflight_requirements: >-
+      {{ lookup('ansible.builtin.file',
+      playbook_dir ~ '/collections/requirements.yml') | from_yaml }}
+
+- name: G4 | requirements.yml liste des collections
+  ansible.builtin.assert:
+    that:
+      - pacemaker_preflight_requirements.collections is defined
+      - pacemaker_preflight_requirements.collections is sequence
+      - pacemaker_preflight_requirements.collections | length > 0
+    fail_msg: >-
+      {{ playbook_dir }}/collections/requirements.yml ne contient pas de liste
+      'collections'. Restaurer le fichier (git checkout --
+      collections/requirements.yml).
+    quiet: true
+
+- name: G4 | Collection installée à la version exacte de requirements.yml
+  ansible.builtin.assert:
+    that:
+      - item.version is defined
+      - item.version is string
+      - >-
+        item.version
+        is regex('^==[0-9]+[.][0-9]+[.][0-9]+$', match_type='fullmatch')
+      - >-
+        pacemaker_preflight_installed
+        == (item.version | regex_replace('^==', ''))
+    fail_msg: >-
+      {{ item.name }} : requirements.yml demande
+      {{ item.version | default('aucune version') }} (forme attendue
+      ==X.Y.Z), installée dans {{ playbook_dir }}/collections :
+      {{ pacemaker_preflight_installed }}. Corriger depuis la racine du dépôt :
+      ansible-galaxy collection install -r collections/requirements.yml
+      -p collections --force
+    quiet: true
+  loop: "{{ pacemaker_preflight_requirements.collections }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    pacemaker_preflight_manifest: >-
+      {{ playbook_dir ~ '/collections/ansible_collections/'
+      ~ (item.name | replace('.', '/')) ~ '/MANIFEST.json' }}
+    pacemaker_preflight_installed: >-
+      {{ (lookup('ansible.builtin.file', pacemaker_preflight_manifest)
+      | from_json).collection_info.version
+      if pacemaker_preflight_manifest is file else 'absente' }}
+
+# ---------------------------------------------------- inventaire / variables
+
+# G5 (R-03). Avec inventory = /dev/null (ansible.cfg), un -i oublié donne un
+# inventaire vide : un play sur pacemaker_nodes ne s'exécuterait pas. groups
+# n'est pas réduit par --limit (AC/vars/manager.py:487).
+- name: G5 | Groupe pacemaker_nodes à exactement 2 hôtes
+  ansible.builtin.assert:
+    that:
+      - "'pacemaker_nodes' in groups"
+      - groups['pacemaker_nodes'] | length == 2
+    fail_msg: >-
+      Groupe pacemaker_nodes {{ ('à ' ~ (groups['pacemaker_nodes'] | length) ~
+      ' hôte(s) : ' ~ (groups['pacemaker_nodes'] | join(', ')))
+      if 'pacemaker_nodes' in groups else 'absent' }} ; inventaire lu :
+      {{ ansible_inventory_sources | default([]) | join(', ') }}. Passer
+      -i inventories/<env> (ansible.cfg fixe inventory = /dev/null,
+      CLAUDE.md §5) et déclarer exactement 2 hôtes dans le groupe
+      (CLAUDE.md §6).
+    quiet: true
+
+# G6 (R-04, F-06). --limit réduit ansible_play_hosts_all : get_hosts() est
+# appelé avec ignore_restrictions=True mais sans ignore_limits
+# (AC/plugins/strategy/__init__.py:274, AC/inventory/manager.py:388-389,
+# 404-407).
+# Comparer ansible_play_hosts à ansible_play_hosts_all ne détecte donc pas
+# --limit. ansible_limit est posé dès que --limit est passé
+# (AC/utils/vars.py:211-230). La variable d'environnement ANSIBLE_LIMIT
+# n'existe pas en 2.14.18 (C.DEFAULT_SUBSET = None, AC/constants.py:110).
+# Sous --limit sans localhost, ce play est sauté (« no hosts matched ») : la
+# même garde est rejouée en tête du play nœuds (nodes.yml).
+- name: G6 | Aucune restriction --limit
+  ansible.builtin.assert:
+    that:
+      - ansible_limit is not defined
+    fail_msg: >-
+      --limit {{ ansible_limit | default('') }} détecté. Le preflight et le
+      playbook cluster s'exécutent toujours sur les 2 nœuds ensemble : le rôle
+      ha_cluster construit corosync.conf depuis ansible_play_hosts (F-06,
+      CLAUDE.md §6). Relancer sans --limit.
+    quiet: true
+
+# G7 (R-14, P-05). Contraintes de pcs 0.11.11, `pcs cluster setup
+# --corosync_conf` (appelé par le rôle sans --force,
+# LSR/tasks/shell_pcs/pcs-cluster-setup-pcs-0.10.yml:3-13) :
+#   - non vide (pcs/lib/corosync/config_validators.py:280-282) ;
+#   - ^[a-zA-Z0-9_-]{0,32}$, erreur sauf --force (même fichier, l.57-91 et
+#     283-289 ; pcs/lib/commands/cluster.py:506,611-618) ;
+#   - sans { } \n \r (pcs/lib/validate.py:596-626).
+# corosync 3.1.10 n'impose aucune contrainte de caractères documentée
+# (man/corosync.conf.5:338-340 ; exec/totemconfig.c:946-973, sert à dériver
+# un identifiant). "my-cluster" est le défaut du rôle
+# (LSR/defaults/main.yml:28).
+# fullmatch : avec un simple ^...$, Python accepte un \n final.
+- name: G7 | pacemaker_cluster_name valide
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].pacemaker_cluster_name is defined
+      - hostvars[item].pacemaker_cluster_name is string
+      - hostvars[item].pacemaker_cluster_name | length > 0
+      - hostvars[item].pacemaker_cluster_name != 'my-cluster'
+      - >-
+        hostvars[item].pacemaker_cluster_name
+        is regex('^[A-Za-z0-9_-]{1,32}$', match_type='fullmatch')
+    fail_msg: >-
+      pacemaker_cluster_name pour {{ item }} =
+      {{ (hostvars[item].pacemaker_cluster_name | to_json)
+      if hostvars[item].pacemaker_cluster_name is defined
+      else 'non définie' }} :
+      attendu une chaîne de 1 à 32 caractères parmi A-Z a-z 0-9 _ -
+      (contrainte de pcs 0.11.11), différente de « my-cluster » (défaut du
+      rôle). À renseigner dans inventories/<env>/group_vars/pacemaker_nodes.yml.
+    quiet: true
+  loop: "{{ groups['pacemaker_nodes'] }}"
+
+# G8 (D3, R-09, F-19). Avec netaddr, ipaddr renvoie False pour une entrée
+# invalide et fait d'une IP sans « / » un /32, sans erreur : le format est
+# donc vérifié d'abord par expression régulière, puis recoupé par netaddr.
+- name: G8 | pacemaker_vip_cidr renseignée et de la forme adresse/préfixe
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].pacemaker_vip_cidr is defined
+      - hostvars[item].pacemaker_vip_cidr is string
+      - hostvars[item].pacemaker_vip_cidr | length > 0
+      - "'/' in hostvars[item].pacemaker_vip_cidr"
+    fail_msg: >-
+      pacemaker_vip_cidr pour {{ item }} =
+      {{ (hostvars[item].pacemaker_vip_cidr | to_json)
+      if hostvars[item].pacemaker_vip_cidr is defined
+      else 'non définie' }} :
+      attendu a.b.c.d/préfixe, par exemple <IP>/24 (D3). Sans « / », le filtre
+      ipaddr en ferait un /32 sans erreur (F-19). À renseigner dans
+      inventories/<env>/group_vars/pacemaker_nodes.yml.
+    quiet: true
+  loop: "{{ groups['pacemaker_nodes'] }}"
+
+# Octets décimaux 0-255 sans zéro initial ; préfixe 1 à 30. /31 et /32 sont
+# refusés : ils n'ont pas d'adresse de réseau ni de broadcast distinctes, et
+# /32 est le résultat silencieux d'une IP sans préfixe (F-19).
+- name: G8 | pacemaker_vip_cidr est une IPv4 valide avec un préfixe de 1 à 30
+  ansible.builtin.assert:
+    that:
+      - pacemaker_preflight_vip.split('/') | length == 2
+      - >-
+        pacemaker_preflight_vip.split('/')[0]
+        is regex('^' ~ pacemaker_preflight_re_octet ~ '([.]'
+        ~ pacemaker_preflight_re_octet ~ '){3}$', match_type='fullmatch')
+      - >-
+        pacemaker_preflight_vip.split('/')[1]
+        is regex('^([1-9]|[12][0-9]|30)$', match_type='fullmatch')
+      - pacemaker_preflight_vip | ansible.utils.ipv4 is string
+    fail_msg: >-
+      pacemaker_vip_cidr pour {{ item }} =
+      {{ pacemaker_preflight_vip | to_json }} :
+      adresse IPv4 invalide (4 octets décimaux de 0 à 255, sans zéro initial)
+      ou préfixe hors de 1 à 30. Corriger dans
+      inventories/<env>/group_vars/pacemaker_nodes.yml.
+    quiet: true
+  loop: "{{ groups['pacemaker_nodes'] }}"
+  vars:
+    pacemaker_preflight_vip: "{{ hostvars[item].pacemaker_vip_cidr }}"
+    # Un octet décimal de 0 à 255, sans zéro initial.
+    pacemaker_preflight_re_octet: >-
+      (25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])
+
+- name: G8 | pacemaker_vip_cidr n'est ni l'adresse de réseau ni le broadcast
+  ansible.builtin.assert:
+    that:
+      - >-
+        pacemaker_preflight_vip.split('/')[0]
+        != (pacemaker_preflight_vip | ansible.utils.ipaddr('network'))
+      - >-
+        pacemaker_preflight_vip.split('/')[0]
+        != (pacemaker_preflight_vip | ansible.utils.ipaddr('broadcast'))
+    fail_msg: >-
+      pacemaker_vip_cidr pour {{ item }} = {{ pacemaker_preflight_vip }} :
+      c'est l'adresse de réseau
+      ({{ pacemaker_preflight_vip | ansible.utils.ipaddr('network') }})
+      ou de broadcast
+      ({{ pacemaker_preflight_vip | ansible.utils.ipaddr('broadcast') }})
+      du sous-réseau. Choisir une adresse d'hôte libre dans
+      inventories/<env>/group_vars/pacemaker_nodes.yml.
+    quiet: true
+  loop: "{{ groups['pacemaker_nodes'] }}"
+  vars:
+    pacemaker_preflight_vip: "{{ hostvars[item].pacemaker_vip_cidr }}"
+
+# G9 (D3). L'existence de l'interface sur chaque nœud est vérifiée en N2.
+- name: G9 | pacemaker_vip_nic renseignée
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].pacemaker_vip_nic is defined
+      - hostvars[item].pacemaker_vip_nic is string
+      - hostvars[item].pacemaker_vip_nic | length > 0
+      - hostvars[item].pacemaker_vip_nic is not regex('[{]([{]|[%])')
+    fail_msg: >-
+      pacemaker_vip_nic pour {{ item }} =
+      {{ (hostvars[item].pacemaker_vip_nic | to_json)
+      if hostvars[item].pacemaker_vip_nic is defined
+      else 'non définie' }} :
+      attendu le nom de l'interface qui portera la VIP sur les nœuds (D3).
+      À renseigner dans inventories/<env>/group_vars/pacemaker_nodes.yml.
+    quiet: true
+  loop: "{{ groups['pacemaker_nodes'] }}"
+
+# G10 (D5, F-13). La garde porte sur vault_pacemaker_hacluster_password et non
+# sur pacemaker_hacluster_password : lue via hostvars, celle-ci vaut le texte
+# brut du gabarit quand la variable Vault manque, et "is defined" est vrai
+# (voir l'en-tête de ce fichier).
+# Aucune condition ni aucun message n'affiche la valeur : le résultat d'assert
+# ne contient que le texte de la condition
+# (AC/plugins/action/assert.py:101-111).
+# no_log n'est pas posé, car il masquerait aussi le message d'échec.
+# L'absence de la valeur en -vvv est démontrée en repro (journal L2).
+- name: G10 | vault_pacemaker_hacluster_password défini et non vide
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].vault_pacemaker_hacluster_password is defined
+      - hostvars[item].vault_pacemaker_hacluster_password is not none
+      - hostvars[item].vault_pacemaker_hacluster_password | string | length > 0
+      - >-
+        hostvars[item].vault_pacemaker_hacluster_password | string
+        is not regex('[{]([{]|[%])')
+    fail_msg: >-
+      vault_pacemaker_hacluster_password absente, nulle ou vide pour
+      {{ item }} (la valeur n'est jamais affichée). La définir dans un fichier
+      chiffré par ansible-vault chargé pour le groupe pacemaker_nodes de
+      inventories/<env>/ (D5, CLAUDE.md §11), et fournir le mot de passe Vault
+      (--ask-vault-pass, ou --vault-password-file vers un fichier hors dépôt).
+    quiet: true
+  loop: "{{ groups['pacemaker_nodes'] }}"
+
+- name: G10 | pacemaker_hacluster_password provient de la variable Vault
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].pacemaker_hacluster_password is defined
+      - >-
+        hostvars[item].pacemaker_hacluster_password
+        == hostvars[item].vault_pacemaker_hacluster_password
+    fail_msg: >-
+      pacemaker_hacluster_password pour {{ item }} ne vaut pas
+      vault_pacemaker_hacluster_password (la valeur n'est jamais affichée). Elle
+      doit rester "{{ '{{' }} vault_pacemaker_hacluster_password {{ '}}' }}"
+      (inventories/example/group_vars/pacemaker_nodes.yml) : ne la redéfinir
+      ni dans host_vars ni en clair.
+    quiet: true
+  loop: "{{ groups['pacemaker_nodes'] }}"
+
+# Une seule ressource IPaddr2 et un seul cluster : un nom, une VIP, une
+# interface (paramètre nic unique, F-14) et un mot de passe identiques sur les
+# 2 nœuds.
+- name: G7-G10 | Valeurs identiques sur les 2 nœuds
+  ansible.builtin.assert:
+    that:
+      - >-
+        hostvars[pacemaker_preflight_n1].pacemaker_cluster_name
+        == hostvars[pacemaker_preflight_n2].pacemaker_cluster_name
+      - >-
+        hostvars[pacemaker_preflight_n1].pacemaker_vip_cidr
+        == hostvars[pacemaker_preflight_n2].pacemaker_vip_cidr
+      - >-
+        hostvars[pacemaker_preflight_n1].pacemaker_vip_nic
+        == hostvars[pacemaker_preflight_n2].pacemaker_vip_nic
+      - >-
+        hostvars[pacemaker_preflight_n1].vault_pacemaker_hacluster_password
+        == hostvars[pacemaker_preflight_n2].vault_pacemaker_hacluster_password
+    fail_msg: >-
+      Les variables du projet diffèrent entre {{ pacemaker_preflight_n1 }} et
+      {{ pacemaker_preflight_n2 }} (condition en échec ci-dessus ; les
+      mots de passe ne sont jamais affichés). Les définir une seule fois dans
+      inventories/<env>/group_vars/pacemaker_nodes.yml, sans surcharge dans
+      host_vars.
+    quiet: true
+  vars:
+    pacemaker_preflight_n1: "{{ groups['pacemaker_nodes'][0] }}"
+    pacemaker_preflight_n2: "{{ groups['pacemaker_nodes'][1] }}"
