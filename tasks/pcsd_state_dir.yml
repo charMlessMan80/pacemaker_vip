@@ -1,0 +1,57 @@
+---
+# D21 (R-32, P-19) : sur un nœud vierge, le rôle ha_cluster 1.88.9 échoue sur
+# « Destination directory /var/lib/pcsd does not exist » (tâche « Distribute
+# pcs_settings.conf », repro L3b et L3c ; constaté absent sur cible).
+# Cause : dans pcs-0.11.11-2.el9_8.1, /var/lib/pcsd est %ghost
+# (rpm -qp --qf '%{FILEFLAGS:fflags}' : « g drwx------ root:root ») ; c'est
+# systemd qui le crée au démarrage de pcsd :
+#   /usr/lib/systemd/system/pcsd.service:13-14
+#     StateDirectory=pcsd
+#     StateDirectoryMode=0700
+# (pas de User= : root). Le rôle arrête pcsd avant d'écrire dedans
+# (LSR/tasks/shell_pcs/configure-shell.yml:6-9).
+# Contournement (i) : installer pcs et démarrer pcsd une fois, seulement si le
+# répertoire manque. Sans effet si le répertoire existe.
+
+- name: D21 - présence de /var/lib/pcsd
+  ansible.builtin.stat:
+    path: /var/lib/pcsd
+    get_checksum: false
+  register: pacemaker_pcsd_dir_before
+
+- name: D21 - création par systemd (nœud vierge)
+  when: not pacemaker_pcsd_dir_before.stat.exists
+  block:
+    - name: D21 - installer pcs
+      ansible.builtin.dnf:
+        name: pcs
+        state: present
+
+    - name: D21 - démarrer pcsd une fois (systemd crée StateDirectory)
+      ansible.builtin.systemd:
+        name: pcsd
+        state: started
+
+- name: D21 - état de /var/lib/pcsd
+  ansible.builtin.stat:
+    path: /var/lib/pcsd
+    get_checksum: false
+  register: pacemaker_pcsd_dir
+
+- name: D21 - /var/lib/pcsd est un répertoire 0700 root:root
+  ansible.builtin.assert:
+    that:
+      - pacemaker_pcsd_dir.stat.exists
+      - pacemaker_pcsd_dir.stat.isdir
+      - pacemaker_pcsd_dir.stat.mode == '0700'
+      - pacemaker_pcsd_dir.stat.uid == 0
+      - pacemaker_pcsd_dir.stat.gid == 0
+    fail_msg: >-
+      {{ inventory_hostname }} : /var/lib/pcsd
+      {% if not pacemaker_pcsd_dir.stat.exists %}absent après le démarrage de
+      pcsd (vérifier « systemctl status pcsd » et StateDirectory dans
+      « systemctl cat pcsd »){% else %}attendu répertoire 0700 root:root,
+      trouvé {{ pacemaker_pcsd_dir.stat.mode | default('?') }}
+      {{ pacemaker_pcsd_dir.stat.uid | default('?') }}:{{
+      pacemaker_pcsd_dir.stat.gid | default('?') }}{% endif %}.
+    quiet: true

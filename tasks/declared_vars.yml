@@ -1,0 +1,63 @@
+---
+# C5 : chaque variable ha_cluster* déclarée par cluster.yml a, à l'exécution,
+# EXACTEMENT la valeur déclarée, type compris.
+#
+# Source unique : pacemaker_ha_cluster_declared (play vars de cluster.yml),
+# dont les variables de premier niveau sont la fusion YAML. Les extra vars
+# (-e) priment sur les play vars : un -e les écrase sans erreur, et
+# « -e x=false » donne la chaîne "false" (R-23, F-43).
+#
+# Comparaison sur la sérialisation JSON triée : false, "false", 0 et "0"
+# donnent des textes différents, ce que « == » ne garantit pas (True == 1 en
+# Python). Les messages ne citent que des NOMS, jamais des valeurs (le mot de
+# passe hacluster fait partie des variables comparées).
+#
+# hostvars ne contient pas les play vars : HostVars appelle
+# get_vars(host=...) sans play (AC/vars/hostvars.py:78,93-104), et les play
+# vars ne sont ajoutées que si play est fourni (AC/vars/manager.py:319-320).
+# Un nom ha_cluster* présent dans hostvars vient donc de l'inventaire, de -e,
+# de set_fact ou d'include_vars (repro L3c).
+
+- name: C5 - le dictionnaire de référence ne vient pas de l'inventaire ni de -e
+  ansible.builtin.assert:
+    that:
+      - "'pacemaker_ha_cluster_declared' not in hostvars[inventory_hostname]"
+    fail_msg: >-
+      {{ inventory_hostname }} : pacemaker_ha_cluster_declared est défini hors
+      de cluster.yml (inventaire ou -e). Le retirer : seul cluster.yml déclare
+      les variables du rôle.
+    quiet: true
+
+- name: C5 - valeurs effectives égales aux valeurs déclarées
+  vars:
+    pacemaker_c5_declared: "{{ pacemaker_ha_cluster_declared }}"
+    pacemaker_c5_overridden: >-
+      {%- set bad = [] -%}
+      {%- for name in pacemaker_c5_declared | sort -%}
+      {%-   set actual = lookup('ansible.builtin.vars', name) -%}
+      {%-   if (pacemaker_c5_declared[name] | to_json(sort_keys=true))
+              != (actual | to_json(sort_keys=true)) -%}
+      {%-     set _ = bad.append(name) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ bad }}
+    pacemaker_c5_undeclared: >-
+      {{ hostvars[inventory_hostname].keys()
+         | select('match', '^ha_cluster(_|$)')
+         | difference(pacemaker_c5_declared.keys())
+         | sort }}
+  ansible.builtin.assert:
+    that:
+      - pacemaker_c5_overridden | length == 0
+      - pacemaker_c5_undeclared | length == 0
+    fail_msg: >-
+      {{ inventory_hostname }} :
+      {% if pacemaker_c5_overridden %}variables du rôle dont la valeur ou le
+      type diffère de cluster.yml (écrasées par -e ?) :
+      {{ pacemaker_c5_overridden | join(', ') }}. {% endif %}
+      {% if pacemaker_c5_undeclared %}variables du rôle définies hors de
+      cluster.yml (inventaire, -e) et non déclarées par lui :
+      {{ pacemaker_c5_undeclared | join(', ') }}. {% endif %}
+      Retirer ces -e ou ces variables d'inventaire ; tout changement passe par
+      cluster.yml (fenêtre de maintenance, CLAUDE.md §9).
+    quiet: true

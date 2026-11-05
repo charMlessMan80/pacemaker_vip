@@ -4,8 +4,9 @@ Playbook Ansible pour créer un cluster Pacemaker à 2 nœuds Oracle Linux 9 (VM
 portant une ressource VIP unique, avec le rôle `ha_cluster` de
 `fedora.linux_system_roles` 1.88.9.
 
-> État : socle (L1), preflight (L2) et preflight étendu (L3b) livrés. Le playbook
-> cluster + VIP (L3c) n'est pas encore livré.
+> État : socle (L1), preflight (L2), preflight étendu (L3b) et playbook cluster + VIP
+> (L3c) livrés. Le playbook cluster est **validé en repro conteneur uniquement, à
+> valider sur cible** (premier déploiement réel non encore fait).
 >
 > **Aucun fencing n'est configuré** (décision D2). Un split-brain peut donc rendre la
 > VIP active sur les deux nœuds, et cette configuration n'est pas supportée par
@@ -54,7 +55,7 @@ Aucun inventaire par défaut (`inventory = /dev/null`). Il faut toujours passer
 ## Preflight (`preflight.yml`)
 
 Gardes bloquantes, en lecture seule, à lancer avant toute modification des nœuds. Le
-playbook cluster (L3) l'importera en tête. Depuis la **racine du dépôt** :
+playbook cluster (`cluster.yml`) l'importe en tête. Depuis la **racine du dépôt** :
 
 ```sh
 ansible-playbook -i inventories/<env> preflight.yml --ask-vault-pass
@@ -111,6 +112,105 @@ Inventaire réel : copier `inventories/example/`, nommer chaque hôte exactement
 `pacemaker_node_ip` par hôte et `group_vars/pacemaker_nodes.yml`, et définir
 `vault_pacemaker_hacluster_password` dans un fichier chiffré par `ansible-vault` chargé pour le groupe `pacemaker_nodes`. Le fichier de mot de passe
 Vault reste hors du dépôt.
+
+## Playbook cluster (`cluster.yml`)
+
+Crée le cluster Pacemaker à 2 nœuds et la ressource VIP `vip` (IPaddr2) avec le rôle
+`fedora.linux_system_roles.ha_cluster` 1.88.9.
+
+1. `import_playbook: preflight.yml` : toutes les gardes ci-dessus ; si l'une échoue,
+   rien ne touche les nœuds.
+2. Play `pacemaker_nodes` (`become`, `any_errors_fatal`, `/usr/bin/python3.9`) :
+   - **C5** : chaque variable `ha_cluster*` a exactement la valeur et le type déclarés
+     dans `cluster.yml` (dictionnaire `pacemaker_ha_cluster_declared`, source unique).
+     Un `-e` qui en écrase une, ou une variable `ha_cluster*` non déclarée venue de
+     l'inventaire ou de `-e`, arrête le play avant toute modification.
+   - **D21** : sur un nœud vierge (`/var/lib/pcsd` absent), installe pcs et démarre
+     pcsd une fois, pour que systemd crée `/var/lib/pcsd` (0700 root:root). Sans
+     effet si le répertoire existe. Sans cela, le rôle échoue sur un nœud vierge.
+   - Rôle `ha_cluster` : knet IPv4, `wait_for_all: "0"`, `stonith-enabled=false`,
+     `resource-stickiness=1`, aucun paquet de fencing, adresses corosync et pcs =
+     `pacemaker_node_ip`, nom de nœud = nom d'inventaire.
+   - **V1-V5**, en lecture seule, chacune relancée au plus 30 fois toutes les 2 s :
+     - V1 : `vip` Started sur exactement un nœud (crm_mon), et l'adresse posée sur ce
+       seul nœud ;
+     - V2 : `stonith-enabled=false` dans les options effectives ;
+     - V3 : `corosync-quorumtool -s` rc 0, Flags `2Node Quorate`, sans `WaitForAll` ;
+     - V4 : `ring0_addr` de chaque nœud = son `pacemaker_node_ip`, `ip_version` ipv4,
+       lien knet connecté entre ces adresses ;
+     - V5 : `resource-stickiness=1` dans `rsc_defaults`, non redéfini sur `vip`.
+
+Aucune vérification n'affiche de clé ni le mot de passe.
+
+## Exploitation
+
+> **Validé en repro conteneur (2 nœuds OL9 systemd, rôle réellement exécuté), à valider
+> sur cible.** Les durées indiquées viennent de la repro.
+
+### Premier déploiement
+
+Prérequis : `preflight.yml` vert sur la cible avec le même inventaire et le même
+environnement ; inventaire réel **hors du dépôt** (le dépôt est public) ; harnais
+limité aux 4 variables admises par G1, journal éventuel protégé (C3). Depuis la
+**racine du dépôt** :
+
+```sh
+ansible-playbook -i <chemin de l'inventaire hors dépôt> cluster.yml --ask-vault-pass
+```
+
+Jamais `-v`, `--check`, `--diff`, `--limit`, ni `-e` sur une variable `ha_cluster*`
+(gardes C1, C4, G6, C5). Un premier déploiement ne se simule pas en `--check` (R-28).
+Jamais `--tags` ni `--skip-tags` : le rôle n'a aucun tag, et `--tags <x>` termine en
+rc=0 après le seul preflight, sans rien déployer ni vérifier (repro L3c, R-35).
+
+Résultat attendu : `failed=0` partout et V1-V5 `ok`. V1-V5 garantissent, au moment de
+la vérification, ce qui est listé ci-dessus. Elles ne garantissent pas la bascule
+(voir plus bas), ni l'absence de VIP en double après une coupure réseau entre nœuds
+(aucun fencing, D2).
+
+Le rôle signale toujours `changed` : un second passage sans changement de variables ne
+doit pas toucher corosync.conf ni la VIP. En repro, la tâche « Stop cluster daemons to
+reload configuration » est sautée, corosync.conf et la CIB sont identiques, et la VIP
+n'est ni arrêtée ni déplacée.
+
+### Changement de configuration
+
+Modifier `cluster.yml` (variables du rôle) ou l'inventaire (`pacemaker_cluster_name`,
+`pacemaker_vip_cidr`, `pacemaker_vip_nic`, `pacemaker_node_ip`), puis relancer la même
+commande, en **fenêtre de maintenance**.
+- Tout changement de corosync.conf (nom de cluster, transport, quorum, adresses des
+  nœuds) ou des clés arrête `pacemaker` et `corosync` **sur les deux nœuds à la
+  fois**, puis les redémarre : la VIP est coupée (F-08 ; constaté en repro pour
+  `wait_for_all`).
+- Un changement limité à la CIB (paramètres de la VIP, stickiness) ne redémarre pas
+  corosync : l'arrêt n'a lieu que si corosync.conf, une authkey ou la configuration
+  SBD change (`fedora.linux_system_roles` 1.88.9
+  `roles/ha_cluster/tasks/shell_pcs/cluster-start-and-reload.yml:24-42`). À VÉRIFIER (non testé) : si la VIP est redémarrée quand ses paramètres
+  changent.
+
+Ne pas configurer le cluster à la main (`pcs …`) : le rôle purge au passage suivant
+tout ce qui n'est pas déclaré (CLAUDE.md §8).
+
+### Redémarrage décalé d'un nœud (D11)
+
+Un nœud à la fois :
+1. Repérer le porteur de la VIP et vérifier que l'autre nœud est en ligne :
+   `crm_mon -1` (les deux nœuds `Online`).
+2. Redémarrer le nœud. S'il porte la VIP, elle passe sur l'autre (environ 1 s en
+   repro, avec un arrêt propre).
+3. Attendre son retour : `crm_mon -1` (deux nœuds `Online`) et
+   `corosync-quorumtool -s` (`Flags: 2Node Quorate`).
+4. La VIP **ne revient pas** sur le nœud redémarré (stickiness 1). Vérifier
+   `crm_mon -1 --include=failcounts` ; en cas d'échec ancien, `pcs resource cleanup vip`.
+5. Seulement ensuite, l'autre nœud.
+
+Si les deux nœuds sont arrêtés, le premier qui démarre devient quorate seul et démarre
+la VIP (environ 20 s en repro), même si l'autre est vivant mais injoignable (D8, risque
+accepté).
+
+Sur le nœud qui porte la VIP, ne pas réactiver le profil NetworkManager de l'interface
+(`nmcli con up …`) : la VIP est retirée jusqu'au moniteur suivant (10 s) (repro L3c,
+R-34).
 
 ## Documentation
 

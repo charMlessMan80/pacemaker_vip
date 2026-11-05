@@ -1,0 +1,114 @@
+---
+# Playbook cluster du projet pacemaker_vip : cluster Pacemaker à 2 nœuds
+# Oracle Linux 9 et ressource VIP unique, via le rôle ha_cluster de
+# fedora.linux_system_roles 1.88.9. À lancer depuis la racine du dépôt :
+#   ansible-playbook -i <inventaire hors dépôt> cluster.yml --ask-vault-pass
+# Jamais avec -v, --check, --diff ni --limit (gardes C1, C4, G6 ; R-28).
+#
+# Le rôle redémarre corosync et pacemaker sur les 2 nœuds à la fois quand
+# corosync.conf ou une clé change (CLAUDE.md §9) : tout changement des
+# variables ci-dessous se fait en fenêtre de maintenance.
+
+# CLAUDE.md §14.1 : le preflight en tête. Si une garde échoue, rien ne
+# s'exécute sur les nœuds (F-34).
+- name: Preflight
+  ansible.builtin.import_playbook: preflight.yml
+
+- name: Cluster Pacemaker 2 nœuds et VIP
+  hosts: pacemaker_nodes
+  become: true
+  any_errors_fatal: true
+  gather_facts: true
+  vars:
+    # D15 (F-44) : interpréteur fixe, comme au play 2 du preflight.
+    ansible_python_interpreter: /usr/bin/python3.9
+
+    # Source UNIQUE des variables du rôle. L'ancre &pacemaker_ha_cluster est
+    # fusionnée au niveau du play par la clé « << » ci-dessous (clé de
+    # fusion YAML, gérée par AC/parsing/yaml/constructor.py:58) : le rôle lit
+    # les variables ha_cluster_* de premier niveau, et la garde C5
+    # (tasks/declared_vars.yml) compare chacune à ce dictionnaire. Un -e qui
+    # écrase une variable de premier niveau ne change pas ce dictionnaire.
+    # Syntaxes : README du rôle (LSR/README.md, sections citées).
+    pacemaker_ha_cluster_declared: &pacemaker_ha_cluster
+      # LSR/README.md:315 ; défaut « my-cluster » refusé par G7.
+      ha_cluster_cluster_name: "{{ pacemaker_cluster_name }}"
+      # D5 : vient de Vault (G10) ; LSR/README.md:156.
+      ha_cluster_hacluster_password: "{{ pacemaker_hacluster_password }}"
+      # CLAUDE.md §7 : toujours explicites (F-04, F-15) ; LSR/README.md:61,
+      # 75, 95, 115, 123, 275.
+      ha_cluster_enable_repos: false
+      ha_cluster_manage_firewall: false
+      ha_cluster_manage_selinux: false
+      ha_cluster_cluster_present: true
+      ha_cluster_regenerate_keys: false
+      ha_cluster_start_on_boot: true
+      # D19 : aucun paquet de fencing (LSR/README.md:141). fence_xvm.key reste
+      # distribuée sur x86_64 (R-33, accepté D22).
+      ha_cluster_fence_agent_packages: []
+      # D10, D20 : nom de nœud = nom d'inventaire (= uname -n, N7) ; adresses
+      # pcs et corosync = pacemaker_node_ip (G11, N7 ; R-22). Variable de
+      # play, rendue sur chaque hôte : le rôle la lit localement
+      # (LSR/tasks/shell_pcs/check-and-prepare-role-variables.yml:5,32-40)
+      # et n'en lit par hostvars que les set_fact dérivés
+      # (__ha_cluster_node_name, __ha_cluster_local_node ; hostvars ne
+      # contient pas les play vars, repro L3c). LSR/README.md:1456.
+      ha_cluster:
+        node_name: "{{ inventory_hostname }}"
+        pcs_address: "{{ pacemaker_node_ip }}"
+        corosync_addresses:
+          - "{{ pacemaker_node_ip }}"
+      # D9, D14 : knet, lien unique, IPv4 (LSR/README.md:321).
+      ha_cluster_transport:
+        type: knet
+        options:
+          - name: ip_version
+            value: ipv4
+      # D8 : wait_for_all désactivé ; pcs n'accepte que "0"/"1"
+      # (LSR/README.md:396).
+      ha_cluster_quorum:
+        options:
+          - name: wait_for_all
+            value: "0"
+      # D2, CLAUDE.md §8 : sans fencing, stonith-enabled doit être déclaré
+      # (LSR/README.md:597 ; F-07, F-11).
+      ha_cluster_cluster_properties:
+        - attrs:
+            - name: stonith-enabled
+              value: "false"
+      # D13 : la purge du rôle effacerait la valeur du build OL9 (R-26)
+      # (LSR/README.md:850-871 : meta_attrs, liste d'ensembles d'attrs).
+      ha_cluster_resource_defaults:
+        meta_attrs:
+          - attrs:
+              - name: resource-stickiness
+                value: "1"
+      # D3, D20 : ressource « vip » (LSR/README.md:616 ; agent IPaddr2, F-14).
+      ha_cluster_resource_primitives:
+        - id: vip
+          agent: ocf:heartbeat:IPaddr2
+          instance_attrs:
+            - attrs:
+                - name: ip
+                  value: >-
+                    {{ pacemaker_vip_cidr | ansible.utils.ipaddr('address') }}
+                - name: cidr_netmask
+                  value: >-
+                    {{ pacemaker_vip_cidr | ansible.utils.ipaddr('prefix') }}
+                - name: nic
+                  value: "{{ pacemaker_vip_nic }}"
+    <<: *pacemaker_ha_cluster
+
+  pre_tasks:
+    - name: C5 - variables du rôle telles que déclarées
+      ansible.builtin.include_tasks: tasks/declared_vars.yml
+
+    - name: D21 - répertoire d'état de pcsd
+      ansible.builtin.include_tasks: tasks/pcsd_state_dir.yml
+
+  roles:
+    - role: fedora.linux_system_roles.ha_cluster
+
+  post_tasks:
+    - name: V1-V5 - état du cluster après déploiement (lecture seule)
+      ansible.builtin.include_tasks: tasks/verify.yml

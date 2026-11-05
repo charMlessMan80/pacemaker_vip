@@ -139,11 +139,14 @@ Abréviations de sources :
 
 - **Règle** : toute modification qui touche corosync.conf (nom de cluster, transport,
   totem, quorum, liste des nœuds) ou les clés (`ha_cluster_regenerate_keys`) se fait
-  en fenêtre de maintenance, après un passage `--check --diff`.
+  en fenêtre de maintenance, en modifiant `cluster.yml` ou l'inventaire (jamais par
+  `-e`, refusé par C5). **Ni `--check` ni `--diff`** : `--diff` affiche les clés
+  (D18, C4), et `--check` ne simule pas un premier déploiement (R-28).
 - **Raison** : si corosync.conf ou une authkey change, le rôle arrête `pacemaker` et
   `corosync` sur **tous** les nœuds à la fois, puis les redémarre
   (`LSR/tasks/shell_pcs/cluster-start-and-reload.yml:24-42`). La VIP est coupée
-  (L0 Q2, F-08).
+  (L0 Q2, F-08 ; repro L3c : `wait_for_all` modifié, tâche « Stop cluster daemons »
+  en `changed` sur les 2 nœuds).
 
 ## 10. L'idempotence se teste sur l'état, pas sur le compteur `changed`
 
@@ -246,3 +249,42 @@ Abréviations de sources :
   - **Raison** : OracleLinux est absent de la table de découverte ; Ansible prend le
     premier interpréteur trouvé, python3.11 s'il est installé
     (`AC/executor/interpreter_discovery.py:114-117,160-166`, repro L3a).
+
+## 17. Playbook cluster (`cluster.yml`)
+
+- **Règle 17.1** (C5) : les variables du rôle sont déclarées **une seule fois**, dans le
+  dictionnaire ancré `pacemaker_ha_cluster_declared` de `cluster.yml`, fusionné au
+  niveau du play par la clé YAML `<<` (`AC/parsing/yaml/constructor.py:58`). C5
+  compare chaque variable effective à ce dictionnaire, sur la sérialisation JSON
+  (valeur **et** type), et refuse toute variable `ha_cluster*` venue de l'inventaire
+  ou de `-e` sans être déclarée. Les messages ne citent que des noms.
+  - **Raison** : les extra vars priment sur les play vars, sans erreur ; `-e x=false`
+    donne la chaîne `"false"` (R-23, F-43). `True == 1` en Python : `==` seul ne
+    détecte pas un changement de type.
+- **Règle 17.2** : une variable de play n'est **pas** visible par `hostvars`. Pour lire
+  depuis un hôte une valeur calculée sur un autre, la poser par `set_fact` (ou la lire
+  dans l'inventaire).
+  - **Raison** : `HostVars` appelle `get_vars(host=…)` sans play
+    (`AC/vars/hostvars.py:78,93-104`), et les play vars ne sont ajoutées qu'avec un
+    play (`AC/vars/manager.py:319-320`) (repro L3c). Le rôle ne lit `ha_cluster` que
+    localement et n'utilise `hostvars` que pour ses `set_fact` dérivés
+    (`LSR/tasks/shell_pcs/check-and-prepare-role-variables.yml:5,32-40`) : la variable
+    de play `ha_cluster` convient.
+- **Règle 17.3** (D21) : avant le rôle, si `/var/lib/pcsd` manque, installer pcs et
+  démarrer pcsd une fois ; vérifier ensuite `0700 root:root`. Ne jamais créer le
+  répertoire à la main.
+  - **Raison** : `/var/lib/pcsd` est `%ghost` dans `pcs-0.11.11-2.el9_8.1`, créé par
+    systemd (`pcsd.service:13-14`, `StateDirectory=pcsd`, `StateDirectoryMode=0700`) ;
+    sans lui le rôle échoue (R-32, constaté sur cible).
+- **Règle 17.4** : après le rôle, V1-V5 lisent l'état réel (crm_mon, corosync-quorumtool,
+  corosync-cmapctl, corosync-cfgtool, cibadmin), en lecture seule et bornés dans le
+  temps. Une boucle `until` s'arrête sur « conforme **ou** tentatives épuisées », puis
+  un `assert` échoue avec un message clair.
+  - **Raison** : un `until` épuisé marque la tâche en échec avec la sortie brute
+    (`AC/executor/task_executor.py:777-781`) ; le compteur `changed` du rôle ne prouve
+    rien (§10).
+- **Règle 17.5** : sur le nœud qui porte la VIP, ne jamais réactiver le profil
+  NetworkManager de `pacemaker_vip_nic` (`nmcli con up`) hors fenêtre de maintenance.
+  - **Raison** : la réactivation retire la VIP (adresse ajoutée hors NetworkManager) ;
+    Pacemaker ne la repose qu'au moniteur suivant (intervalle 10 s) et laisse un
+    `fail-count` (repro L3c, R-34).

@@ -1,0 +1,275 @@
+---
+# V1-V5 : état du cluster après le rôle, en LECTURE SEULE, sur chaque nœud.
+# Le compteur « changed » du rôle ne prouve rien (CLAUDE.md §10) : on lit
+# l'état effectif.
+#
+# Bornage : chaque lecture est relancée jusqu'à ce qu'elle soit conforme, au
+# plus pacemaker_verify_retries fois, toutes les pacemaker_verify_delay
+# secondes (environ 60 s). La condition d'arrêt inclut « attempts >= N » :
+# la boucle s'arrête sans erreur, puis l'assert qui suit échoue avec un
+# message clair (un until épuisé marquerait la tâche en échec avec la sortie
+# brute, AC/executor/task_executor.py:777-781).
+#
+# Aucune commande ne lit de clé ni le mot de passe : crm_mon, cibadmin sur
+# rsc_defaults et la primitive vip, corosync-quorumtool, corosync-cmapctl
+# sur nodelist.node et totem.ip_version uniquement, corosync-cfgtool -n.
+#
+# Les expressions régulières ne sont jamais coupées en fin de ligne : le
+# pliage YAML (>-) y insérerait une espace ; on concatène avec « ~ ».
+
+- name: V1-V5
+  vars:
+    pacemaker_verify_retries: 30
+    pacemaker_verify_delay: 2
+    pacemaker_vip_address: >-
+      {{ pacemaker_vip_cidr | ansible.utils.ipaddr('address') }}
+    pacemaker_peer: >-
+      {{ ansible_play_hosts_all | difference([inventory_hostname]) | first }}
+
+    # V1, V2 : crm_mon (vue de l'ordonnanceur de Pacemaker).
+    pacemaker_v1_rsc: >-
+      {{ pacemaker_v1_out.stdout | default('')
+         | regex_search('<resource id="vip"[^>]*>') | default('', true) }}
+    pacemaker_v1_holder: >-
+      {{ (pacemaker_v1_out.stdout | default('')
+          | regex_search('<resource id="vip"[^>]*>\s*'
+                         ~ '<node name="([^"]+)"', '\1')
+          | default([''], true)) | first }}
+    pacemaker_v1_ok: >-
+      {{ 'role="Started"' in pacemaker_v1_rsc
+         and 'active="true"' in pacemaker_v1_rsc
+         and 'failed="false"' in pacemaker_v1_rsc
+         and 'managed="true"' in pacemaker_v1_rsc
+         and 'nodes_running_on="1"' in pacemaker_v1_rsc
+         and pacemaker_v1_holder in ansible_play_hosts }}
+    pacemaker_v2_opts: >-
+      {{ pacemaker_v1_out.stdout | default('')
+         | regex_search('<cluster_options [^>]*>') | default('', true) }}
+    pacemaker_v2_ok: "{{ 'stonith-enabled=\"false\"' in pacemaker_v2_opts }}"
+
+    # V3 : corosync-quorumtool -s rend 0 si quorate.
+    pacemaker_v3_flags: >-
+      {{ (pacemaker_v3_out.stdout | default('')
+          | regex_search('(?m)^Flags:[ \t]*(.*)$', '\1')
+          | default([''], true)) | first | split }}
+    pacemaker_v3_ok: >-
+      {{ pacemaker_v3_out.rc | default(-1) == 0
+         and '2Node' in pacemaker_v3_flags
+         and 'Quorate' in pacemaker_v3_flags
+         and 'WaitForAll' not in pacemaker_v3_flags }}
+
+    # V4 : nodelist chargé par corosync (cmap), ip_version effectif, et lien
+    # knet réellement établi vers le pair (corosync-cfgtool -n) :
+    # « LINK: 0 udp (<ip locale>-><ip du pair>) enabled connected ».
+    pacemaker_v4_found: >-
+      {%- set out = [] -%}
+      {%- set txt = pacemaker_v4_out.stdout | default('') -%}
+      {%- set names = txt | regex_findall(
+            'nodelist\.node\.(\d+)\.name \(str\) = (\S+)') -%}
+      {%- set addrs = txt | regex_findall(
+            'nodelist\.node\.(\d+)\.ring0_addr \(str\) = (\S+)') -%}
+      {%- for n in names -%}
+      {%-   for a in addrs if a[0] == n[0] -%}
+      {%-     set _ = out.append(n[1] ~ '=' ~ a[1]) -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out | sort }}
+    pacemaker_v4_expected: >-
+      {%- set out = [] -%}
+      {%- for h in ansible_play_hosts_all -%}
+      {%-   set _ = out.append(h ~ '=' ~ hostvars[h]['pacemaker_node_ip']) -%}
+      {%- endfor -%}
+      {{ out | sort }}
+    pacemaker_v4_ipver: >-
+      {{ (pacemaker_v4_out.stdout | default('')
+          | regex_search('(?m)^totem\.ip_version \(str\) = (\S+)$', '\1')
+          | default([''], true)) | first }}
+    pacemaker_v4_link: >-
+      {{ '(' ~ pacemaker_node_ip ~ '->'
+         ~ hostvars[pacemaker_peer]['pacemaker_node_ip']
+         ~ ') enabled connected' }}
+    pacemaker_v4_link_ok: >-
+      {{ pacemaker_v4_link in pacemaker_v4_out.stdout | default('') }}
+    pacemaker_v4_ok: >-
+      {{ pacemaker_v4_found == pacemaker_v4_expected
+         and pacemaker_v4_ipver == 'ipv4'
+         and pacemaker_v4_link_ok }}
+
+    # V5 : resource-stickiness = 1 dans rsc_defaults, et non redéfini sur vip.
+    pacemaker_v5_values: >-
+      {{ pacemaker_v5_out.stdout | default('')
+         | regex_findall('<nvpair [^>]*name="resource-stickiness"'
+                         ~ '[^>]*value="([^"]*)"') }}
+    pacemaker_v5_on_vip: >-
+      {{ 'resource-stickiness' in pacemaker_v5_vip.stdout | default('') }}
+    pacemaker_v5_ok: >-
+      {{ pacemaker_v5_values == ['1'] and not pacemaker_v5_on_vip }}
+  block:
+    - name: V1/V2 - lire l'état du cluster (crm_mon)
+      ansible.builtin.command:
+        argv: [crm_mon, --one-shot, --output-as=xml]
+      register: pacemaker_v1_out
+      changed_when: false
+      failed_when: false
+      retries: "{{ pacemaker_verify_retries }}"
+      delay: "{{ pacemaker_verify_delay }}"
+      until: >-
+        (pacemaker_v1_ok and pacemaker_v2_ok)
+        or pacemaker_v1_out.attempts >= pacemaker_verify_retries
+
+    # V2 avant V1 : avec stonith-enabled=true et aucun équipement de fencing,
+    # la VIP s'arrête aussi ; le message doit nommer la cause.
+    - name: V2 - stonith-enabled=false effectif
+      ansible.builtin.assert:
+        that:
+          - pacemaker_v2_ok
+        fail_msg: >-
+          {{ inventory_hostname }} : stonith-enabled n'est pas false dans les
+          options effectives du cluster
+          ({{ pacemaker_v2_opts | default('cluster_options absent', true) }}).
+          Sans fencing (D2), aucune ressource ne démarre. Voir
+          « pcs property config » ; la valeur doit venir de cluster.yml.
+        quiet: true
+
+    - name: V1 - VIP Started sur un seul nœud selon Pacemaker
+      ansible.builtin.assert:
+        that:
+          - pacemaker_v1_out.rc == 0
+          - pacemaker_v1_ok
+        fail_msg: >-
+          {{ inventory_hostname }} : la ressource vip n'est pas Started sur
+          exactement un nœud du cluster après
+          {{ pacemaker_verify_retries * pacemaker_verify_delay }} s
+          (crm_mon rc={{ pacemaker_v1_out.rc }} ;
+          {{ pacemaker_v1_rsc | default('ressource vip absente', true) }}).
+          Voir « crm_mon -1 » et « pcs resource status vip » sur un nœud.
+        quiet: true
+
+    - name: V1 - nœud qui porte la VIP selon Pacemaker
+      ansible.builtin.set_fact:
+        pacemaker_v1_node: "{{ pacemaker_v1_holder }}"
+
+    - name: V1 - adresses IPv4 de l'interface de la VIP
+      ansible.builtin.command:
+        argv: [ip, -4, -o, addr, show, dev, "{{ pacemaker_vip_nic }}"]
+      register: pacemaker_v1_ip
+      changed_when: false
+
+    - name: V1 - VIP posée sur le seul nœud désigné par Pacemaker
+      run_once: true
+      vars:
+        pacemaker_v1_nodes: >-
+          {{ ansible_play_hosts_all
+             | map('extract', hostvars, 'pacemaker_v1_node') | unique | list }}
+        pacemaker_v1_carriers: >-
+          {%- set out = [] -%}
+          {%- set inet = ' inet ' ~ pacemaker_vip_address ~ '/' -%}
+          {%- for h in ansible_play_hosts_all -%}
+          {%-   if inet in hostvars[h]['pacemaker_v1_ip']['stdout'] -%}
+          {%-     set _ = out.append(h) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+      ansible.builtin.assert:
+        that:
+          - pacemaker_v1_nodes | length == 1
+          - pacemaker_v1_carriers == pacemaker_v1_nodes
+        fail_msg: >-
+          VIP {{ pacemaker_vip_address }} : Pacemaker la place sur
+          {{ pacemaker_v1_nodes | join(', ') }}, elle est configurée sur
+          {{ pacemaker_v1_carriers | join(', ') | default('aucun nœud', true) }}
+          ({{ pacemaker_vip_nic }}). Attendu : un seul et même nœud.
+        quiet: true
+
+    - name: V3 - lire le quorum (corosync-quorumtool)
+      ansible.builtin.command:
+        argv: [corosync-quorumtool, -s]
+      register: pacemaker_v3_out
+      changed_when: false
+      failed_when: false
+      retries: "{{ pacemaker_verify_retries }}"
+      delay: "{{ pacemaker_verify_delay }}"
+      until: >-
+        pacemaker_v3_ok
+        or pacemaker_v3_out.attempts >= pacemaker_verify_retries
+
+    - name: V3 - quorate, 2Node, sans WaitForAll
+      ansible.builtin.assert:
+        that:
+          - pacemaker_v3_ok
+        fail_msg: >-
+          {{ inventory_hostname }} : corosync-quorumtool -s
+          rc={{ pacemaker_v3_out.rc }}, Flags :
+          {{ pacemaker_v3_flags | join(' ') | default('(absent)', true) }}.
+          Attendu : rc 0, 2Node et Quorate, sans WaitForAll (D8 :
+          wait_for_all "0" dans cluster.yml).
+        quiet: true
+
+    - name: V4 - lire nodelist et ip_version (cmapctl), liens (cfgtool)
+      ansible.builtin.shell:
+        cmd: >-
+          corosync-cmapctl -b nodelist.node
+          && corosync-cmapctl -g totem.ip_version
+          && corosync-cfgtool -n
+      register: pacemaker_v4_out
+      changed_when: false
+      failed_when: false
+      retries: "{{ pacemaker_verify_retries }}"
+      delay: "{{ pacemaker_verify_delay }}"
+      until: >-
+        pacemaker_v4_ok
+        or pacemaker_v4_out.attempts >= pacemaker_verify_retries
+
+    - name: V4 - ring0_addr = pacemaker_node_ip, ipv4, lien connecté
+      ansible.builtin.assert:
+        that:
+          - pacemaker_v4_ok
+        fail_msg: >-
+          {{ inventory_hostname }} : corosync a chargé
+          {{ pacemaker_v4_found | join(', ') | default('aucun nœud', true) }},
+          ip_version={{ pacemaker_v4_ipver | default('(absent)', true) }},
+          lien {{ pacemaker_v4_link }}
+          {{ 'présent' if pacemaker_v4_link_ok else 'absent' }} ;
+          attendu {{ pacemaker_v4_expected | join(', ') }}, ip_version=ipv4 et
+          lien knet connecté entre les pacemaker_node_ip. Une adresse
+          dérivée de known-hosts change au passage suivant et redémarre le
+          cluster (R-22).
+        quiet: true
+
+    - name: V5 - lire rsc_defaults (cibadmin)
+      ansible.builtin.command:
+        argv: [cibadmin, --query, --scope, rsc_defaults]
+      register: pacemaker_v5_out
+      changed_when: false
+      failed_when: false
+      retries: "{{ pacemaker_verify_retries }}"
+      delay: "{{ pacemaker_verify_delay }}"
+      until: >-
+        pacemaker_v5_ok
+        or pacemaker_v5_out.attempts >= pacemaker_verify_retries
+
+    - name: V5 - méta-attributs propres à la primitive vip (cibadmin)
+      ansible.builtin.command:
+        argv:
+          - cibadmin
+          - --query
+          - --xpath
+          - //primitive[@id='vip']/meta_attributes
+      register: pacemaker_v5_vip
+      changed_when: false
+      # cibadmin rend 105 (« No such device or address ») quand le XPath ne
+      # trouve rien : la primitive n'a pas de méta-attributs propres, cas
+      # attendu (repro L3c).
+      failed_when: pacemaker_v5_vip.rc not in [0, 105]
+
+    - name: V5 - resource-stickiness = 1 effectif
+      ansible.builtin.assert:
+        that:
+          - pacemaker_v5_ok
+        fail_msg: >-
+          {{ inventory_hostname }} : resource-stickiness dans rsc_defaults =
+          {{ pacemaker_v5_values | join(', ') | default('(absent)', true) }}{{
+          ', et redéfini sur la primitive vip' if pacemaker_v5_on_vip else ''
+          }} ; attendu 1 seul, non redéfini (D13 ; sinon la VIP revient sur
+          le nœud redémarré, D11).
+        quiet: true
