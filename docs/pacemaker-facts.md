@@ -16,6 +16,7 @@ ce que git sait déjà.
 | **RA** | ClusterLabs/resource-agents tag `v4.10.0` (amont ; le RPM OL9 contient des correctifs rétroportés) |
 | **pcs-src** | archive GitHub `pcs-0.11.11.tar.gz`, sha256 `4d3577571aab01a8c2b44c1ad18a0a61363a4a7957ad461c4a73e4afd2d6d6b2` |
 | **corosync-src** | archive GitHub `corosync-3.1.10.tar.gz`, sha256 `03c55b984380bdb68ecd8d0f9cb1f9f0c2a7e6e7b7f437becc33e9a804018340` |
+| **PM** | SRPM OL9 `pacemaker-2.1.10-3.0.1.el9_8.src.rpm` (oss.oracle.com, sha256 `d1f96df6414a4ac25dd5805b0aa13a33bf1eb40330069ad2199389f1c90dda3b`) : `pacemaker.spec`, et l'archive `pacemaker-5693eaeee.tar.gz` (code et `doc/sphinx/Pacemaker_Explained`) |
 | **iputils** | archive GitHub `iputils-20210202.tar.gz` (sha256 `3f557ecfd2ace873801231d2c1f42de73ced9fbc1ef3a438d847688b5fb0e8ab`), `arping.c` ; page de manuel `arping.8` extraite du RPM OL9 `iputils-20210202-15.0.1.el9_7` (sha256 `ff498fa2625d945dde3b50f88e367d794c1f6b628da30d8e0885aac5df9f703e`) |
 
 **Types de preuve**
@@ -25,6 +26,9 @@ ce que git sait déjà.
 | repoquery | `dnf repoquery` exécuté le 2026-11-05 sur `https://yum.oracle.com/repo/OracleLinux/OL9/{baseos/latest,appstream,addons}/x86_64/` |
 | repro locale | conteneur `docker.io/library/oraclelinux:9` (Oracle Linux 9.8) avec le RPM `ansible-core-2.14.18-3.el9_8.1` et `python3-3.9.25-7.0.1.el9_8.2`. **Ce n'est ni le contrôleur ni un nœud.** |
 | repro conteneur (L2) | contrôleur = repro locale + `python3-netaddr-0.10.1-3.el9` + `podman-remote` ; 2 nœuds `oraclelinux:9` avec systemd, NetworkManager et sudo (pv-n1 192.0.2.11/24, pv-n2 192.0.2.12/24, réseau podman 192.0.2.0/24, RFC 5737), connexion `containers.podman.podman` 1.21.2. Dépôts : yum.oracle.com le 2026-11-05. **Ni le contrôleur, ni les nœuds, ni Hyper-V.** |
+
+| repro conteneur (L3a/L3b) | idem L2, plus les RPM OL9 `pacemaker-2.1.10-3.0.1.el9_8`, `pcs-0.11.11-2.el9_8.1`, `corosync-3.1.10-1.el9_8.2`, `resource-agents-4.10.0-111.el9_8.19`, `openssh-clients-9.9p1-7.0.2.el9_8` ; L3b : rôle ha_cluster 1.88.9 **réellement exécuté** sur pv-n1/pv-n2 par un playbook jetable hors dépôt (cluster formé, VIP démarrée). **Ni le contrôleur, ni les nœuds, ni Hyper-V.** |
+| cible (utilisateur) | sorties fournies par l'utilisateur le 2026-11-05, lancées sur le contrôleur et les nœuds réels. |
 
 Statuts : **PROUVÉ** (lu dans un artefact cité) ou **À VÉRIFIER : où**.
 
@@ -91,6 +95,49 @@ Statuts : **PROUVÉ** (lu dans un artefact cité) ou **À VÉRIFIER : où**.
 | F-33 | Avec `any_errors_fatal: true`, un nœud injoignable pendant la collecte des faits arrête le play pour tous les hôtes (« NO MORE HOSTS LEFT »), avant toute tâche du rôle. | `AC/plugins/strategy/linear.py:350-368` ; repro conteneur L2 (pv-n2 arrêté) | PROUVÉ |
 | F-34 | Quand le play 1 (`localhost`) échoue, le play 2 ne s'exécute pas. | repro locale L2 (`-i inventories/example` : échec en G7, play nœuds absent du journal) | PROUVÉ (repro) |
 
+### Constats sur cible (2026-11-05)
+
+Source : sorties fournies par l'utilisateur le 2026-11-05 (contrôleur `<contrôleur>`, nœuds `<nœud-1>` et `<nœud-2>`).
+
+| ID | Constat | Statut |
+|---|---|---|
+| C-01 | Contrôleur OL9, ansible-core 2.14.18 : preflight G1-G10 OK (version L2). | constaté (cible) |
+| C-02 | Nœuds <IP nœud 1>/24 et <IP nœud 2>/24, inventaire hors dépôt avec `ansible_host` : N1-N6 OK ; SSH en root, `become` OK. | constaté (cible) |
+| C-03 | N5 démontrée dans les deux sens sur le vSwitch Hyper-V réel : avec la VIP égale à l'IP du contrôleur (<IP contrôleur>), échec « répond déjà sur eth0 » (réponse ARP reçue). | constaté (cible) |
+| C-04 | Une seule interface par nœud : `eth0` (plus `lo`). | constaté (cible) |
+| C-05 | `/etc/hosts` ne contient pas les noms des nœuds ; nsswitch `hosts: files dns myhostname` ; `getent ahosts <nom court>` donne l'IPv4 par DNS (FQDN `.<domaine interne>`) ; `getent hosts <nom propre>` donne `fe80::…` (fourni par myhostname). | constaté (cible) |
+| C-06 | `uname -n` = nom d'inventaire exact sur chaque nœud (`<nœud-1>`, `<nœud-2>`). | constaté (cible) |
+| C-07 | Interpréteur découvert sur les nœuds : `/usr/bin/python3.9`, avec l'avertissement « interpreter discovery ». | constaté (cible) |
+| C-08 | Harnais de session (conservé) : `ANSIBLE_SSH_EXTRA_ARGS` (`UserKnownHostsFile` éphémère, `StrictHostKeyChecking=yes`), `ANSIBLE_SSH_CONTROL_PATH_DIR`, `ANSIBLE_LOCAL_TEMP`, `ANSIBLE_LOG_PATH` (répertoire `/tmp/tmp.*` en 755, journal en 644). G1 (L2) ne les voyait pas. | constaté (cible) |
+
+### Résolution avant le playbook cluster (L3a)
+
+| ID | Fait | Source | Statut |
+|---|---|---|---|
+| F-35 | Nom de nœud = `ha_cluster.node_name`, sinon `inventory_hostname`. corosync identifie le nœud local en comparant `uname -n` (exact, puis sans domaine) au `name` du nodelist ; à défaut, il appelle `getnameinfo()` sur chaque adresse locale (**résolution inverse**). Pacemaker lit le `name` du nodelist par nodeid, sans résolution. pcs joint les nœuds par l'adresse de `known-hosts` (`dest_list`). | `LSR/tasks/shell_pcs/check-and-prepare-role-variables.yml:3-9` ; `corosync-src exec/totemconfig.c:648-860` ; `PM lib/cluster/corosync.c:170-211` ; repro conteneur L3a | PROUVÉ |
+| F-36 | `ip_version` vaut `ipv6-4` par défaut avec knet (`ipv4` seulement avec udp) et ne sert qu'à résoudre les `ringX_addr`. pcs ne résout pas un littéral IP. `ip_version=ipv4` en transport knet est accepté et écrit dans `totem`. | `corosync-src exec/totemconfig.c:916-939`, `exec/totemip.c:306-366` ; `pcs-src pcs/lib/corosync/node.py:84-96` ; repro locale L3a | PROUVÉ (absence de requête DNS sur un littéral : À VÉRIFIER, `strace` sur cible) |
+| F-37 | Sans `corosync_addresses`, `pcs cluster setup --corosync_conf` prend l'adresse de `known-hosts`, sinon le nom (qui doit alors se résoudre : « Unable to resolve addresses », erreur sans `--force`). Le rôle authentifie **après** avoir généré corosync.conf : l'adresse change entre le premier et le second passage. | `pcs-src pcs/lib/commands/cluster.py:513-530` ; `LSR/tasks/main.yml:72-79` ; repro locale L3a (cas B et C) | PROUVÉ |
+| F-38 | Le rôle s'authentifie seulement là où `pcs status pcsd -- <noms>` rend 2 : nœud non authentifié **ou** pcsd arrêté. Les jetons ne sont synchronisés que si corosync.conf existe ; ils survivent au redémarrage de pcsd, à la régénération de son certificat (pcs ne le vérifie pas) et au changement du mot de passe hacluster. Aucune variable du rôle n'évite l'authentification par mot de passe. | `LSR/tasks/shell_pcs/cluster-auth.yml:3-31` ; `pcs-src pcs/pcsd.py:224-285`, `pcsd/pcs.rb:1049-1053`, `pcs/common/node_communicator.py:556-557` ; repro conteneur L3a | PROUVÉ |
+| F-39 | `ansible_verbosity` = verbosité effective (`-v`, `ANSIBLE_VERBOSITY`, `verbosity` du cfg cumulés). `invocation` (dont un `stdin`) s'affiche dès la verbosité 3. Le journal reprend l'écran ; il est créé au démarrage avec les droits de l'umask (644 avec 022). Un chemin non inscriptible ne donne qu'un avertissement. | `AC/utils/vars.py:211-230` ; `AC/cli/arguments/option_helpers.py:212` ; `AC/plugins/callback/__init__.py:234-235` ; `AC/utils/display.py:132-144,310-322` ; repro locale L3a | PROUVÉ |
+| F-40 | `wait_for_all` n'accepte que `"0"` ou `"1"` (un booléen YAML `false` est refusé). pcs 0.11.11 accepte `two_node: 1` avec `wait_for_all: 0` sans avertissement. Repro du rôle (L3b) : `corosync-quorumtool -s` affiche `Flags: 2Node Quorate`, sans `WaitForAll`. | `pcs-src pcs/lib/corosync/config_validators.py:1698-1830` ; `corosync-src tools/corosync-quorumtool.c:629-637,707` ; repro locale L3a ; repro conteneur L3b | PROUVÉ |
+| F-41 | La purge du rôle supprime `rsc_defaults` et `op_defaults` en entier. Le build OL9 crée les CIB neufs avec `resource-stickiness=1` (`build-resource-defaults`), que cette purge efface ; le défaut de Pacemaker est alors 0. Sans contrainte de localisation, la VIP ne revient pas sur un nœud redémarré, que la stickiness vaille 0 ou 1 (`crm_simulate`). `multiple-active` vaut `stop_start` : arrêt sur les 2 nœuds, puis démarrage sur un seul. | `LSR/tasks/shell_pcs/create-and-push-cib.yml:55-60` ; `PM pacemaker.spec:181-184`, `lib/cib/cib_utils.c:248-260`, `doc/sphinx/Pacemaker_Explained/resources.rst:443-449,521-536` ; repro locale L3a | PROUVÉ |
+| F-42 | IPaddr2 (RPM OL9) : opérations copiées de l'agent par défaut (`copy_operations_from_agent: true`) : `monitor interval=10s timeout=20s`, `start timeout=20s`, `stop timeout=20s`. | `LSR/tasks/shell_pcs/pcs-cib-resource-primitive.yml:23-28` ; repro locale L3a (`pcs -f`, métadonnées de l'agent) | PROUVÉ |
+| F-43 | Précédence : défauts du rôle < group/host vars < play vars < … < extra vars. `-e var=false` passe la **chaîne** `"false"` ; `when: ha_cluster_enable_repos` (sans `bool`) exécute alors la branche. | `AC/vars/manager.py:203-420` ; `LSR/tasks/main.yml:9` ; repro locale L3a | PROUVÉ |
+| F-44 | Oracle Linux (`ID=ol`) est absent de la table de découverte de l'interpréteur : Ansible prend le premier trouvé de `INTERPRETER_PYTHON_FALLBACK`, qui commence par python3.11. `/usr/bin/python3` reste un lien vers `python3.9` (RPM `python3`, sans alternatives). Avec `ansible_python_interpreter: /usr/bin/python3.9` en vars du play, l'interpréteur reste 3.9 même avec python3.11 installé, sans avertissement. | `AC/config/base.yml:1531-1563` ; `AC/executor/interpreter_discovery.py:114-117,160-166` ; repro locale L3a ; repro conteneur L3b (ad hoc sans variable : `/usr/bin/python3.11` et avertissement ; play 2 du preflight : `/usr/bin/python3.9`, 0 avertissement) | PROUVÉ |
+| F-45 | En `--check`, un premier déploiement échoue à « Fetch pcs capabilities » (pcs absent). Sur un cluster existant, le diff du CIB est calculé mais n'est visible qu'en `-v`, et le push est sauté. | `LSR/tasks/shell_pcs/check-and-prepare-role-variables.yml:141-146` ; `create-and-push-cib.yml:257-288` ; `AC/modules/command.py:319-331` | PROUVÉ (code) |
+| F-46 | `openssl passwd -6 -salt … <mot de passe>` met le mot de passe hacluster dans l'argv du processus, sur le nœud ; `no_log` ne le couvre pas. | `LSR/tasks/main.yml:22-36` | PROUVÉ (code) |
+
+### Preflight étendu (L3b)
+
+| ID | Fait | Source | Statut |
+|---|---|---|---|
+| F-47 | **Origine des réglages.** Elle est calculée par `ConfigManager.get_config_value_and_origin` (`env: <NOM>`, chemin du cfg, `cli: …`). Le lookup `config` ne rend que la valeur. `ansible-config dump --only-changed -t all -f json` la publie (entrées `name`, `value`, `origin`, `type`), en 0,2 s en repro, mais il **n'énumère pas les plugins des collections** et ignore un nom `ANSIBLE_*` qui n'est pas un réglage. G1 combine donc ce dump et les noms `ANSIBLE_*` de l'environnement. `--ssh-extra-args`, les extra vars et le cfg sont vus par le lookup `config` avec `plugin_type`. | `AC/config/manager.py:461-515` ; `AC/plugins/lookup/config.py:14-35` ; `AC/cli/config.py:85-91,398-545` ; `AC/plugins/loader.py:947` ; repro locale L3b (`ANSIBLE_PODMAN_EXECUTABLE`, `ANSIBLE_FOO_TYPO` absents du dump) | PROUVÉ |
+| F-48 | `ssh -o StrictHostKeyChecking=` : `no`, `off` et `false` donnent « false », `accept-new` accepte toute clé nouvelle ; la casse est ignorée ; les formes `X=Y`, `X Y` et `-oX=Y` sont valides ; avec deux `-o`, la première valeur l'emporte. `UserKnownHostsFile` accepte une liste de fichiers. `host_key_checking` faux ajoute `-o StrictHostKeyChecking=no`. | repro conteneur L3b (`ssh -G`, openssh-clients-9.9p1-7.0.2.el9_8) ; `AC/plugins/connection/ssh.py:37-55,722-724` | PROUVÉ |
+| F-49 | `ansible_facts['nodename']` = `platform.node()` (nodename d'uname) ; `hostname` n'en garde que la partie avant le premier point. `ansible_facts[<nic>]['ipv4']` est l'adresse **principale** (`ip addr show primary`) ; la VIP posée par IPaddr2 dans le même réseau est **secondaire** (`ipv4_secondaries`). | `AC/module_utils/facts/system/platform.py:55-56` ; `AC/module_utils/facts/network/linux.py:191-214,263-276` ; repro conteneur L3b (VIP 192.0.2.100 secondaire, N7 OK) | PROUVÉ |
+| F-50 | **Rôle 1.88.9 sur un nœud vierge** : `/var/lib/pcsd` est `%ghost` dans `pcs-0.11.11-2.el9_8.1` (non créé à l'installation) ; il est créé par `StateDirectory=pcsd` (0700) au premier démarrage de pcsd. Le rôle arrête pcsd puis écrit `pcs_settings.conf` : **échec** « Destination directory /var/lib/pcsd does not exist ». Après un démarrage préalable de pcsd, le rôle termine (rc=0) : cluster formé, VIP `Started` sur un nœud, adresses IPv4, `stonith-enabled=false`, `resource-stickiness=1`. | repro conteneur L3b (`rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}]' pcs`, `pcsd.service`) ; `LSR/tasks/shell_pcs/configure-shell.yml:6-9,79-86` | PROUVÉ (repro) ; sur cible À VÉRIFIER (§6) |
+| F-51 | Avec `ha_cluster_fence_agent_packages: []`, ni `fence-agents-all` ni `fence-virt` ne sont installés ; mais `/etc/cluster/fence_xvm.key` (512 octets) est **toujours distribuée** sur x86_64. Aucune variable ne l'empêche : seule l'architecture conditionne la tâche, et `ha_cluster_fence_virt_key_src` ne change que la source. | `LSR/vars/RedHat.yml:48` ; `LSR/defaults/main.yml:17` ; `LSR/tasks/main.yml:63-67` ; `LSR/tasks/distribute-fence-virt-key.yml:3-23` ; repro conteneur L3b | PROUVÉ |
+| F-52 | **Preuve D18** (rôle réel, `--check --diff`, verbosité 0, clés marquées sans octet nul). (a) Cluster existant, clés inchangées : 0 occurrence. (b) Clés supprimées sur pv-n2 : les clés corosync, pacemaker et fence_xvm de pv-n1 s'affichent en « after ». (c) `ha_cluster_regenerate_keys: true` : les 3 clés en place s'affichent en « before » (2 lignes chacune). Seule une clé contenant un octet nul est masquée (environ 63 % des clés de 256 octets). | repro conteneur L3b ; `AC/plugins/action/__init__.py:1371-1405` ; `LSR/tasks/presharedkey.yml` | PROUVÉ |
+
 ## 2. Versions épinglées
 
 Fichier `collections/requirements.yml`. Le sha256 publié par l'API Galaxy a été comparé au sha256 du tarball téléchargé le 2026-11-05 : tous identiques.
@@ -112,12 +159,25 @@ Les 4 dépendances n'ont aucune dépendance transitive (`metadata.dependencies =
 | ID | Date | Décision | Motif |
 |---|---|---|---|
 | D1 | 2026-11-05 | Rôle `ha_cluster` de `fedora.linux_system_roles` 1.88.9 épinglé, sur ansible-core 2.14.18 (contrôleur OL9, Python 3.9.25). Pas de venv, pas de montée de version d'ansible-core. | Contraintes du contrôleur existant (F-01, F-02). |
-| D2 | 2026-11-05 | **Aucun fencing.** Risque accepté : split-brain possible, donc VIP active sur les deux nœuds ; configuration non supportée par Red Hat (F-25). `stonith-enabled: false` sera déclaré dans les variables du rôle (F-07, F-11). | **[OUVERT — à fournir par l'utilisateur]** |
+| D2 | 2026-11-05 | **Aucun fencing.** Risque accepté : split-brain possible, donc VIP active sur les deux nœuds ; configuration non supportée par Red Hat (F-25). `stonith-enabled: false` sera déclaré dans les variables du rôle (F-07, F-11). | Utilisateur, 2026-11-05 : les services tournent sur les deux nœuds ; une IP en double, dans les cas qui peuvent y conduire, ne pose pas de problème. |
 | D3 | 2026-11-05 | VIP fournie en une variable au format CIDR, interface en variable. Nœuds et VIP dans le même /24. | Prémisse utilisateur. |
 | D4 | 2026-11-05 | firewalld désactivé sur les nœuds ; filtrage géré par l'infra réseau. | Prémisse utilisateur. Conséquence : `ha_cluster_manage_firewall: false` obligatoire (F-15). |
 | D5 | 2026-11-05 | Mot de passe hacluster via Ansible Vault. | Prémisse utilisateur. |
 | D6 | 2026-11-05 | Projet indépendant : aucune convention héritée d'un autre dépôt. | Décision utilisateur. |
 | D7 | 2026-11-05 | Contrôleur distinct de la machine de développement ; ni contrôleur ni nœuds joignables depuis celle-ci. | Prémisse utilisateur. |
+| D8 | 2026-11-05 | `wait_for_all: "0"` (avec `two_node: 1`). Arbitrage exact : un nœud qui démarre sans voir un pair pourtant vivant devient quorate seul et duplique la VIP, puis `multiple-active=stop_start` la coupe brièvement au retour du lien ; en échange, si un nœud est mort et que l'autre redémarre, la VIP redémarre sans intervention. | Décision utilisateur (F-12, F-40, F-41). |
+| D9 | 2026-11-05 | Lien corosync unique (`eth0`). | Décision utilisateur ; une seule interface par nœud (C-04). |
+| D10 | 2026-11-05 | Adresses IPv4 explicites : variable par hôte `pacemaker_node_ip`, adresse corosync et pcs, contrôlée contre l'IPv4 principale de `pacemaker_vip_nic` (G11, N7). | Décision utilisateur ; aucune dépendance à la résolution de noms (C-05, F-35 à F-37). |
+| D11 | 2026-11-05 | Mises à jour et redémarrages des nœuds en décalé ; le nœud restant reprend la VIP. | Décision utilisateur (F-41). |
+| D12 | 2026-11-05 | **Révisée** : pas de pré-authentification pcs. Contre-mesures : gardes C1-C4 (verbosité, débogage, journal, diff). `-vvv` interdit à l'écran comme dans le journal. | Décision utilisateur (F-38, F-39). |
+| D13 | 2026-11-05 | `ha_cluster_resource_defaults` avec `resource-stickiness = 1` déclaré. | Décision utilisateur : défaut du build OL9, sinon purgé par le rôle (F-41, R-26). |
+| D14 | 2026-11-05 | `ip_version = ipv4` dans le transport knet dès le premier déploiement. | Décision utilisateur (F-36) ; l'ajouter plus tard modifierait corosync.conf (F-08). |
+| D15 | 2026-11-05 | `ansible_python_interpreter = /usr/bin/python3.9` en vars des plays nœuds. | Décision utilisateur (F-44, C-07). |
+| D16 | 2026-11-05 | Journal Ansible autorisé seulement s'il est protégé (garde C3). | Décision utilisateur (F-39). |
+| D17 | 2026-11-05 | G1 généralisée : toute origine `env:` est refusée, sauf `ANSIBLE_SSH_EXTRA_ARGS`, `ANSIBLE_SSH_CONTROL_PATH_DIR`, `ANSIBLE_LOCAL_TEMP`, `ANSIBLE_LOG_PATH` ; vérification des clés SSH jamais désactivée (G1, G12). | Décision utilisateur (C-08, F-47, F-48). |
+| D18 | 2026-11-05 | `--diff` autorisé seulement avec `--check`, et seulement s'il est prouvé qu'il n'affiche pas les authkeys ; sinon interdit en toutes circonstances. **Résultat L3b : interdit en toutes circonstances** (F-52, garde C4). | Décision utilisateur ; preuve L3b. |
+| D19 | 2026-11-05 | `ha_cluster_fence_agent_packages: []` : aucun paquet de fencing installé. | Décision utilisateur (D2) ; `fence_xvm.key` reste distribuée (F-51, R-33). |
+| D20 | 2026-11-05 | Nom de nœud = `inventory_hostname`, égal à `uname -n` (N7). Identifiant de la ressource VIP : `vip` (L3c). | Décision utilisateur (C-06, F-35). |
 
 ## 4. Risques d'échec silencieux et gardes
 
@@ -132,9 +192,9 @@ Les 4 dépendances n'ont aucune dépendance transitive (`metadata.dependencies =
 | R-07 | Ressources ou propriétés manuelles purgées à chaque passage (F-07). | Tout déclarer ; comparer le CIB avant et après. | L3 |
 | R-08 | IPaddr2 avec `nic` et `cidr_netmask` fournis : aucune vérification de sous-réseau. Sans `nic` : choix automatique de l'interface (F-14). | N2 (interface, IPv4 statique) et N3 (même réseau, même préfixe), sur les faits des nœuds. | **L2 (fait)** |
 | R-09 | `ipaddr` renvoie `False` ou `/32` sans erreur (F-19). | G8 : `/` obligatoire, octets et préfixe (1 à 30) vérifiés par expression régulière, recoupés par `ansible.utils.ipv4`, ni réseau ni broadcast ; N3 : préfixe égal à celui de l'interface. | **L2 (fait)** |
-| R-10 | `manage_firewall: true` réactive firewalld ; `manage_selinux` est sauté si firewalld est arrêté (F-15). | Ces variables restent explicitement à `false` ; assertion sur leur valeur. | L3 |
+| R-10 | `manage_firewall: true` réactive firewalld ; `manage_selinux` est sauté si firewalld est arrêté (F-15). | Ces variables restent explicitement à `false` ; assertion `is sameas false` dans le play cluster (C5). | L3c |
 | R-11 | Mot de passe hacluster journalisé sur la cible (F-13). | `no_target_syslog = True` (repro L1). | **L1 (fait)** |
-| R-12 | Mot de passe affiché côté contrôleur en `-vvv` (F-23, limite). | Contre-mesure à établir (P-07). | L3 |
+| R-12 | Mot de passe affiché côté contrôleur en `-vvv` (F-23, limite). | C1 (verbosité 0), C2, C3 (D12 révisée). | **L3b (fait)** |
 | R-13 | Une modification de corosync.conf ou des clés arrête les 2 nœuds à la fois, et le rôle termine en succès (F-08). | Passage `--check --diff` d'abord, fenêtre de maintenance (CLAUDE.md §9). | L3 (procédure) |
 | R-14 | Nom de cluster par défaut `my-cluster` (`LSR/defaults/main.yml:28`). | G7 : `pacemaker_cluster_name` non vide, différent de `my-cluster`, conforme à pcs (F-28). | **L2 (fait)** |
 | R-15 | Test d'idempotence naïf faussé : `changed` vaut toujours vrai (F-09). | Test portant sur l'état. | L3 |
@@ -144,35 +204,56 @@ Les 4 dépendances n'ont aucune dépendance transitive (`metadata.dependencies =
 | R-19 | `arping -D` renvoie 0 sans test sur une interface sans ARP (F-29). | N5 exige aussi « Sent N probes » (N >= 1) et « Received 0 response ». | **L2 (fait)** |
 | R-20 | Preflight sauté par `--skip-tags always`. | Aucune garde technique possible : la consigne d'exploitation est de ne jamais l'utiliser (README). | ouvert |
 | R-21 | N6 lance `dnf repoquery`, qui peut rafraîchir le cache des métadonnées dnf du nœud (écriture dans `/var/cache/dnf`, sans changer la configuration). | Écart accepté et signalé (README, `nodes.yml`). | L2 (signalé) |
+| R-22 | `pcs_address` sans `corosync_addresses` : l'adresse corosync change entre le premier et le second passage, d'où un redémarrage complet (F-37). | D10 : `pacemaker_node_ip` sert aux deux adresses ; G11 et N7 la contrôlent. Les deux variables du rôle sont à déclarer au L3c. | **L3b (gardes)** ; L3c (déclaration) |
+| R-23 | `-e var=false` passe une chaîne : la branche `enable_repos` s'exécute (F-43). | C5 (`is sameas false`) dans le play cluster. | L3c |
+| R-24 | `--diff` affiche les clés corosync, pacemaker et fence_xvm quand elles changent, même en `--check` (F-52). | C4 : `--diff` refusé en toutes circonstances (D18). | **L3b (fait)** |
+| R-25 | Un python3.11 installé change l'interpréteur des modules (F-44). | D15 en vars du play nœuds du preflight (fait) ; play cluster au L3c. | **L3b (fait)** ; L3c |
+| R-26 | La purge du rôle efface `resource-stickiness=1` du build OL9 (F-41). | D13 : stickiness déclarée. | L3c |
+| R-27 | Mot de passe hacluster dans l'argv d'`openssl` sur le nœud (F-46). | Aucune : propre au rôle. | **accepté** (2026-11-05) |
+| R-28 | Premier déploiement non simulable en `--check` (F-45). | Aucune. | **accepté** (2026-11-05) |
+| R-29 | Nom de nœud différent de `uname -n` : corosync passe par une résolution inverse (F-35). | N7 : `inventory_hostname == ansible_facts['nodename']` (D20). | **L3b (fait)** |
+| R-30 | Journal Ansible créé avec les droits de l'umask (F-39) ; cas du harnais : 755/644 (C-08). | C3 (D16). | **L3b (fait)** |
+| R-31 | `pcs status pcsd` rend 2 aussi quand pcsd est arrêté : le rôle repasse le mot de passe en `stdin` (F-38). | C1 : verbosité 0, le `stdin` n'est pas affiché. | **L3b (couvert)** |
+| R-32 | Rôle 1.88.9 en échec sur un nœud vierge : `/var/lib/pcsd` absent (F-50). Échec visible, pas silencieux, mais bloquant au premier déploiement. | Démarrer pcsd une fois avant le rôle (systemd crée le répertoire avec ses droits et son contexte). | L3c |
+| R-33 | `/etc/cluster/fence_xvm.key` distribuée malgré D19 (F-51). | Aucune variable ; la clé n'est plus affichée grâce à C4. | **accepté sous réserve** de validation utilisateur (P-21) |
 
 ## 5. Points ouverts
 
-### Bloquants pour L3
+### Levés le 2026-11-05
+
+| ID | Point | Levé par |
+|---|---|---|
+| P-01 | Motif de D2. | D2 (motif) |
+| P-02 | Acceptation de `wait_for_all`. | D8 |
+| P-03 | Lien corosync dédié ou unique. | D9, C-04 |
+| P-04 | Résolution des noms d'inventaire. | D10, D20, C-05, C-06 |
+| P-07 | Fuite du mot de passe côté contrôleur. | D12 révisée, C1-C4 |
+| P-11 | `python3-netaddr` sur le contrôleur. | C-01 (G3 OK) |
+| P-12 | Contenu du miroir. | C-02 (N6 OK) |
+| P-15 | Accès aux nœuds. | C-02 (root, `become` OK) |
+| P-16 | NetworkManager et `arping` sur Hyper-V. | C-02, C-03 (N2, N5 OK) |
+
+### Bloquants pour L3c
 
 | ID | Point |
 |---|---|
-| P-01 | Motif de la décision D2 (aucun fencing). |
-| P-02 | Acceptation de `wait_for_all` : après un arrêt complet, la VIP reste arrêtée tant que les 2 nœuds ne se sont pas vus (F-12). |
-| P-03 | Nombre de cartes réseau par VM ; lien corosync dédié ou lien unique (point de défaillance unique). Détermine `corosync_addresses`. |
-| P-04 | Les noms d'inventaire se résolvent-ils, sur chaque nœud, vers l'IP du cluster ? Sinon `corosync_addresses` / `pcs_address` sont nécessaires (`LSR/README.md:1454-1490`). |
-| P-05 | Nom du cluster (valeur de `pacemaker_cluster_name`). |
-| P-07 | Contre-mesures à la fuite du mot de passe côté contrôleur (`-vvv`, `log_path`) (F-13, F-23). |
+| P-05 | Valeur de `pacemaker_cluster_name` dans l'inventaire réel (hors dépôt). |
+| P-18 | Journal du harnais : en 755/644 (C-08), il fait échouer C3. Le placer dans un répertoire 0700 (journal 0600), ou retirer `ANSIBLE_LOG_PATH`. |
+| P-19 | Contournement de R-32 dans le play cluster (démarrage préalable de pcsd), à valider. |
 
 ### Non bloquants pour l'écriture, mais à lever avant la mise en service
 
 | ID | Point |
 |---|---|
 | P-06 | Les redémarrages complets du cluster lors des changements de configuration sont-ils acceptables (F-08) ? Faut-il des fenêtres de maintenance ? |
-| P-08 | Filtrage ARP/MAC du vSwitch Hyper-V (basculement de la VIP) : interlocuteur et réglages. |
-| P-09 | Compatibilité réelle du rôle 1.88.9 avec pcs 0.11.11 et pacemaker 2.1.10 : **lue dans le code, jamais testée**. |
-| P-10 | Variables `ANSIBLE_*` présentes dans l'environnement du contrôleur : elles priment sur `ansible.cfg`. |
-| P-11 | Présence de `python3-netaddr` >= 0.10.1 sur le contrôleur. G3 le vérifie et échoue sinon ; à constater au premier lancement. |
-| P-12 | Contenu du miroir interne : ol9_addons, ol9_appstream et ol9_baseos_latest (F-17). N6 le vérifie et échoue sinon ; à constater au premier lancement. |
+| P-08 | Filtrage ARP/MAC du vSwitch Hyper-V lors de la **bascule** de la VIP (ARP gratuit d'IPaddr2) : à constater après le L3c. La détection N5 fonctionne (C-03). |
+| P-09 | Compatibilité réelle du rôle 1.88.9 avec pcs 0.11.11 et pacemaker 2.1.10 : **exécuté en repro conteneur L3b** (rc=0 après contournement de R-32), jamais sur cible. |
+| P-10 | Variables `ANSIBLE_*` du contrôleur : désormais refusées par G1 hors liste blanche (D17) ; à constater avec le harnais réel. |
 | P-13 | Faut-il contrôler les sha256 des tarballs de collections (§2) ? G4 ne contrôle que les versions. |
 | P-14 | Licence du dépôt : `meta/main.yml` porte `license: "À VÉRIFIER"`. |
-| P-15 | Accès aux nœuds : utilisateur distant et `sudo` (le play nœuds est en `become: true`). |
-| P-16 | IP de la VIP sur les vrais nœuds : NetworkManager présent, profil actif `100 (connected)` en `ipv4.method manual` (F-30) ; `arping -D` sur le vSwitch Hyper-V (F-29, P-08). Non validable hors cible. |
 | P-17 | Décisions L2 à valider : VIP en /31 ou /32 refusée (G8) ; `pacemaker_vip_nic` identique sur les 2 nœuds (un seul paramètre `nic` IPaddr2) ; N6 exige les paquets dans les dépôts activés même s'ils sont déjà installés. |
+| P-20 | C3 ne couvre pas les ACL POSIX, une sortie redirigée (`tee`, `script`, ordonnanceur) ni l'historique du terminal. |
+| P-21 | R-33 : accepter la distribution de `fence_xvm.key` malgré D19 ? |
 
 ## 6. Commandes à lancer (hors portée de la machine de développement)
 
@@ -188,6 +269,10 @@ ansible-galaxy collection install -r collections/requirements.yml -p collections
 ansible-galaxy collection list              # collections hors ./collections (information)
 ansible-galaxy collection list -p collections
 ansible-playbook -i inventories/<env> preflight.yml --ask-vault-pass   # L2 : rc=0 attendu
+env | grep -E '^(ANSIBLE_|NO_COLOR)' | cut -d= -f1                      # L3b : seulement la liste blanche D17
+python3 -m ansible.cli.config dump --only-changed -t all -f json | grep '"origin": "env'   # G1 (F-47)
+ls -ld "$(dirname "$ANSIBLE_LOG_PATH")" "$ANSIBLE_LOG_PATH"             # C3 : 0700 et 0600 (P-18)
+ssh -G <nœud> | grep -iE '^(stricthostkeychecking|userknownhostsfile)' # true + fichier réel (F-48)
 ```
 
 ### Sur chaque nœud
@@ -204,13 +289,17 @@ ls -l /dev/watchdog*; wdctl                                 # information (F-24)
 nmcli --escape no --get-values GENERAL.CONNECTION,GENERAL.STATE device show <nic>   # 100 (connected) (F-30)
 nmcli --escape no --get-values ipv4.method connection show <profil>                 # manual
 sudo arping -D -c 2 -I <nic> <VIP>          # rc 0 + « Received 0 response(s) » (F-29)
+uname -n; ip -o -4 addr show dev eth0       # = nom d'inventaire ; IPv4 principale = pacemaker_node_ip (N7)
+rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}\n]' pcs | grep '/var/lib/pcsd '; ls -ld /var/lib/pcsd   # R-32 (F-50)
 dnf --quiet repoquery --available --queryformat '%{name}' pcs corosync-qnetd openssl corosync libknet1-plugins-all resource-agents pacemaker fence-agents-all fence-virt
 ```
 
 ### Après un premier déploiement (sur un nœud)
 
 ```
-corosync-quorumtool -s                       # flags 2Node et WaitForAll (F-12)
+corosync-quorumtool -s                       # rc 0 ; « Flags: 2Node Quorate », sans WaitForAll (D8, F-40)
+corosync-cmapctl -b nodelist.node | grep addr  # ring0_addr = pacemaker_node_ip (D10)
+crm_mon --output-as=xml                      # resource id="vip" role="Started" nodes_running_on="1"
 pcs property config --all | grep stonith     # stonith-enabled = false (D2)
 pcs status; corosync-cfgtool -n              # VIP Started ; port knet effectif (F-16)
 journalctl --since today | grep -c 'Invoked with'   # attendu 0 avec no_target_syslog (F-23, journald)
@@ -223,3 +312,5 @@ journalctl --since today | grep -c 'Invoked with'   # attendu 0 avec no_target_s
 | L0 | 2026-11-05 | Résolution en lecture seule : faits Q1–Q9, sans code. | Faits F-01 à F-19, F-24, F-25. Repro locale (ipaddr, dépendances Galaxy, chargement des vars OL9). |
 | L1 | 2026-11-05 | Socle : CLAUDE.md, ce fichier, `collections/requirements.yml`, `ansible.cfg`, `.gitignore`, `inventories/example/`, README. | Repro locale : installation des 5 versions exactes ; mismatch → ERROR (et warning hors cfg) ; piège du cfg démontré ; `no_target_syslog` démontré (rsyslog) ; inventaire et group_vars chargés ; yamllint rc=0 ; ansible-lint rc=0 (profil production, ansible-lint 26.11.0 / ansible-core 2.21.6, **pas** 2.14). Faits F-20 à F-23 ajoutés. |
 | L2 | 2026-11-05 | Preflight : `preflight.yml` et rôle `pacemaker_preflight` (gardes G1-G10, N1-N6), section README, CLAUDE.md §4, §6 (corrigé) et §14. | Repro locale et repro conteneur, sur ansible-core 2.14.18 : `--syntax-check` rc=0 ; chaque garde vérifiée en nominal et en échec forcé (77 cas, journaux hors dépôt) ; secret absent des sorties `-vvv` (0 occurrence) ; `inventories/example` échoue en G7. yamllint rc=0 ; ansible-lint rc=0 (profil production, ansible-lint 26.11.0 / ansible-core 2.21.6, **pas** 2.14). Faits F-26 à F-34 ajoutés, F-17 corrigé. |
+| L3a | 2026-11-05 | Résolution en lecture seule avant le playbook cluster (R1-R10), sans commit. | Repro locale (pcs `--corosync_conf`, `pcs -f`, `crm_simulate`, verbosité/journal/précédence/interpréteur) et repro conteneur (jetons pcsd). Faits F-35 à F-46, risques R-22 à R-31. |
+| L3b | 2026-11-05 | Preflight étendu : G1 généralisée (origine env, clés SSH), C1-C4, G11, G12, N7, N6 sans fencing, interpréteur du play 2 ; inventaire d'exemple ; README ; CLAUDE.md §4, §11, §15, §16. | Repro locale et repro conteneur sur ansible-core 2.14.18 : `--syntax-check` rc=0 (nominal et `inventories/example`) ; nouvelles gardes : 75 cas (nominal et échecs forcés, messages exacts) ; non-régression : 75 cas L2 rejoués, 70 identiques, 5 écarts attendus (3 cas `-vvv` arrêtés par C1, 2 cas N3/N4 arrêtés plus tôt par G11) ; yamllint rc=0 ; ansible-lint rc=0 (profil production, ansible-lint 26.11.0 / ansible-core 2.21.6, **pas** 2.14). Rôle ha_cluster 1.88.9 exécuté réellement en repro conteneur (F-50) ; preuve D18 (F-52) : `--diff` interdit. Constats sur cible C-01 à C-08 consignés. |

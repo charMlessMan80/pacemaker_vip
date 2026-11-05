@@ -1,5 +1,5 @@
 ---
-# Gardes NŒUDS (N1-N6), plus G6 rejouée ici. Play sur pacemaker_nodes,
+# Gardes NŒUDS (N1-N7), plus G6 rejouée ici. Play sur pacemaker_nodes,
 # gather_facts: true, any_errors_fatal: true, become: true.
 # Lecture seule : faits Ansible, nmcli, arping en mode détection, dnf repoquery.
 # Les commandes portent check_mode: false pour que les gardes s'exécutent aussi
@@ -7,7 +7,7 @@
 # Exception : dnf repoquery peut rafraîchir le cache des métadonnées
 # (/var/cache/dnf), comme tout appel à dnf.
 #
-# Les variables pacemaker_* ont été validées par le play contrôleur (G7-G10).
+# Les variables pacemaker_* ont été validées par le play contrôleur (G7-G11).
 
 # G6, côté nœuds. Sous --limit sans localhost, le play contrôleur est sauté
 # (« no hosts matched ») ; cette garde est alors la seule à s'exécuter.
@@ -183,6 +183,45 @@
       par défaut). Choisir une adresse libre pour pacemaker_vip_cidr.
     quiet: true
 
+# N7 (D10, D20, R1 et R-29 du L3a). Nom de nœud = inventory_hostname (D20) :
+# corosync identifie le nœud local en comparant uname -n au « name » du
+# nodelist, et sinon passe par une résolution inverse des adresses locales
+# (corosync exec/totemconfig.c:721-860). ansible_facts['nodename'] =
+# platform.node() (AC/module_utils/facts/system/platform.py:56), soit le
+# nodename d'uname ; « hostname » n'en garde que la partie avant le premier
+# point (l.55), d'où la comparaison exacte avec nodename.
+# pacemaker_node_ip doit être l'IPv4 PRINCIPALE de pacemaker_vip_nic :
+# ansible_facts[<nic>]['ipv4'] vient de « ip addr show primary dev <nic> »
+# (AC/module_utils/facts/network/linux.py:191-192,263-266) ; les adresses
+# secondaires, dont la VIP posée par IPaddr2 dans le même réseau, sont dans
+# ipv4_secondaries (l.199-214, 275-276). La garde reste donc juste quand le
+# nœud porte la VIP (repro L3b).
+- name: N7 | Nom de nœud et adresse du nœud conformes
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == ansible_facts['nodename']
+      - >-
+        pacemaker_node_ip
+        == ansible_facts[pacemaker_preflight_nic_key]['ipv4']['address']
+    fail_msg: >-
+      {{ inventory_hostname }} :
+      {{ ('uname -n vaut « ' ~ ansible_facts['nodename'] ~ ' » : le nom'
+      ~ " d'inventaire doit être exactement le nom du nœud (D20), car"
+      ~ ' corosync se reconnaît par ce nom (sinon résolution inverse).'
+      ~ " Renommer l'hôte dans inventories/<env>/hosts.yml et y placer"
+      ~ " l'adresse SSH dans ansible_host.")
+      if inventory_hostname != ansible_facts['nodename']
+      else ('pacemaker_node_ip = ' ~ pacemaker_node_ip ~ ", alors que l'IPv4"
+      ~ ' principale de ' ~ pacemaker_vip_nic ~ ' est '
+      ~ ansible_facts[pacemaker_preflight_nic_key]['ipv4']['address']
+      ~ ' (secondaires : '
+      ~ (ansible_facts[pacemaker_preflight_nic_key]['ipv4_secondaries']
+      | default([]) | map(attribute='address') | join(', ')
+      | default('aucune', true)) ~ ').'
+      ~ ' Corriger pacemaker_node_ip dans inventories/<env>/hosts.yml'
+      ~ ' (D10).') }}
+    quiet: true
+
 # N5. VIP déjà portée par un de nos nœuds (adresse secondaire) : cluster
 # existant présumé, la détection de doublon est sautée.
 - name: N5 | Nœuds du cluster qui portent déjà la VIP
@@ -258,8 +297,10 @@
 - name: N6 | Paquets du rôle ha_cluster disponibles dans les dépôts activés
   vars:
     # Paquets installés par le rôle sur OL9 x86_64 (F-05) :
-    # LSR/vars/RedHat.yml:13-24 (essentiels et pile complète) et l.48
-    # (fence-agents-all, fence-virt sur x86_64).
+    # LSR/vars/RedHat.yml:13-24 (essentiels et pile complète). Les paquets de
+    # fencing (fence-agents-all, fence-virt, l.48) ne viennent que du défaut
+    # de ha_cluster_fence_agent_packages (LSR/defaults/main.yml:17,
+    # LSR/tasks/main.yml:58-61), que le playbook cluster fixera à [] (D19).
     pacemaker_preflight_packages:
       - pcs
       - corosync-qnetd
@@ -268,8 +309,6 @@
       - libknet1-plugins-all
       - resource-agents
       - pacemaker
-      - fence-agents-all
-      - fence-virt
   block:
     - name: N6 | Interroger les dépôts activés (dnf repoquery)
       ansible.builtin.command:
@@ -316,8 +355,8 @@
           | join(' / ') }}.
           Dépôts Oracle (F-17) : pcs, corosync-qnetd, libknet1-plugins-all et
           resource-agents seulement dans ol9_addons ; pacemaker et corosync
-          dans ol9_addons et ol9_appstream ; fence-agents-all et fence-virt
-          dans ol9_appstream ; openssl dans ol9_baseos_latest et ol9_appstream.
+          dans ol9_addons et ol9_appstream ; openssl dans ol9_baseos_latest et
+          ol9_appstream.
           Le rôle n'active aucun dépôt sur OL9 (F-04) :
           activer sur le nœud ces dépôts ou leurs équivalents du miroir interne
           (doc Oracle : dnf config-manager --enable ol9_appstream

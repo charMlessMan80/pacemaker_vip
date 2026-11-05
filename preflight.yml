@@ -9,6 +9,8 @@
 # (ansible.cfg), un play sur pacemaker_nodes ne trouverait aucun hôte et
 # s'achèverait sans erreur (R-03).
 # Play 2 sur pacemaker_nodes : gardes nœuds, en lecture seule.
+# Verbosité, journal, --diff et environnement sont vérifiés au play 1
+# (C1-C4, G1) : le play 2 ne s'exécute que si le play 1 a réussi (F-34).
 #
 # tags: always : --tags / --skip-tags ne sautent pas le preflight (seul
 # --skip-tags always le ferait).
@@ -31,6 +33,15 @@
   # arping exige CAP_NET_RAW, et le rôle ha_cluster s'exécutera de toute
   # façon en root : le preflight vérifie aussi que l'élévation fonctionne.
   become: true
+  vars:
+    # D15. Oracle Linux (os-release ID=ol) est absent de la table de
+    # découverte : Ansible prend le premier interpréteur trouvé dans
+    # INTERPRETER_PYTHON_FALLBACK, qui commence par python3.11
+    # (AC/config/base.yml:1531-1563 ; AC/executor/interpreter_discovery.py:
+    # 114-117,160-166). Fixé ici, l'interpréteur ne change plus si un autre
+    # Python est installé (repro L3a et L3b). Les bindings système (dnf)
+    # sont construits pour Python 3.9.
+    ansible_python_interpreter: /usr/bin/python3.9
   roles:
     - role: pacemaker_preflight
       pacemaker_preflight_stage: nodes

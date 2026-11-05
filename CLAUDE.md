@@ -68,7 +68,18 @@ Abréviations de sources :
   l.226-232), puis `~/.ansible.cfg`, puis `/etc/ansible/ansible.cfg`. Le premier
   fichier trouvé est utilisé, sans fusion. Hors racine, la configuration du
   contrôleur s'applique en silence (démontré en repro L1, F-20).
-- Les variables `ANSIBLE_*` de l'environnement priment sur le fichier.
+- Les variables `ANSIBLE_*` de l'environnement priment sur le fichier. **Règle 4.1**
+  (D17) : aucun réglage ne vient de l'environnement, sauf `ANSIBLE_SSH_EXTRA_ARGS`,
+  `ANSIBLE_SSH_CONTROL_PATH_DIR`, `ANSIBLE_LOCAL_TEMP` et `ANSIBLE_LOG_PATH` (harnais de
+  session). G1 lit l'origine de chaque réglage dans `ansible-config dump --only-changed
+  -t all -f json` (origine `env: <NOM>`, `AC/config/manager.py:514-515`), et relève
+  aussi les noms `ANSIBLE_*` de l'environnement : le dump ignore les plugins des
+  collections (`AC/plugins/loader.py:947`) et les noms qui ne sont pas des réglages
+  (repro L3b).
+- **Règle 4.2** (D17) : la vérification des clés d'hôte SSH n'est jamais désactivée,
+  ni par réglage (env, cfg, ligne de commande ; G1) ni par variable d'inventaire
+  (G12) : pas de `StrictHostKeyChecking=no/off/false/accept-new`, pas de
+  `UserKnownHostsFile=/dev/null`, pas de `host_key_checking` faux.
 
 ## 5. Inventaire explicite
 
@@ -153,7 +164,8 @@ Abréviations de sources :
     (`AC/plugins/action/__init__.py:969-970`, `AC/module_utils/basic.py:526-527`).
   - Côté contrôleur, le paramètre reste visible en `-vvv`
     (`AC/plugins/callback/__init__.py:234-235`).
-  - Les autres contre-mesures restent à établir en L3 (point ouvert P-07).
+  - **Pas de pré-authentification pcs** (D12 révisée). Contre-mesures : gardes C1-C4
+    du preflight (§15).
 
 ## 12. Hygiène git
 
@@ -195,3 +207,42 @@ Abréviations de sources :
     (iputils-20210202 `arping.c:562-570,1006-1009`, repro L2, F-29).
 - **Règle 14.4** : chaque garde est démontrée dans les deux sens, nominal et échec
   forcé, avec le message obtenu. Les inventaires de test vivent hors du dépôt.
+
+## 15. Aucune verbosité, aucun --diff, journal protégé
+
+- **Règle 15.1** (D12) : verbosité 0, à l'écran comme dans le journal (garde C1, qui
+  couvre `-v`, `ANSIBLE_VERBOSITY` et `verbosity` du cfg). Ni débogage, ni
+  `keep_remote_files`, ni `display_args_to_stdout`, ni callback autre que `default`
+  (C2).
+  - **Raison** : dès la verbosité 3, le `stdin` de `pcs host auth` (mot de passe
+    hacluster) s'affiche et se journalise (`AC/plugins/callback/__init__.py:234-235`,
+    repro L3a). Le journal reproduit l'écran (`AC/utils/display.py:310-322`).
+- **Règle 15.2** (D18) : `--diff` est interdit, **même avec `--check`** (C4).
+  - **Raison** : preuve L3b (repro conteneur, rôle 1.88.9 réel, `--check --diff`,
+    verbosité 0). Quand une clé partagée change (clé absente sur un nœud ou
+    `ha_cluster_regenerate_keys: true`), le diff de `copy` affiche les clés corosync,
+    pacemaker et fence_xvm. Seule une clé contenant un octet nul est masquée
+    (`AC/plugins/action/__init__.py:1371-1405`), soit environ 63 % des clés de 256
+    octets : le masquage n'est pas fiable.
+- **Règle 15.3** (D16) : journal Ansible autorisé seulement protégé (C3) : fichier sans
+  droit groupe/autres et à l'utilisateur courant, répertoires parents non
+  inscriptibles par d'autres (sticky bit admis sauf pour le répertoire du journal).
+  - **Raison** : Ansible crée le journal au démarrage avec les droits de l'umask, sans
+    `chmod` (`AC/utils/display.py:132-144` ; 644 avec umask 022, repro L3a).
+
+## 16. Noms, adresses et interpréteur des nœuds
+
+- **Règle 16.1** (D20) : le nom d'inventaire d'un nœud est exactement `uname -n` (N7).
+  L'adresse SSH va dans `ansible_host`.
+  - **Raison** : corosync se reconnaît en comparant `uname -n` au `name` du nodelist,
+    et sinon passe par une résolution inverse (`corosync exec/totemconfig.c:721-860`).
+- **Règle 16.2** (D10) : `pacemaker_node_ip`, par hôte, est l'IPv4 **principale** de
+  `pacemaker_vip_nic` (G11, N7). Elle sert à la fois d'adresse corosync et d'adresse pcs.
+  - **Raison** : sans `corosync_addresses`, l'adresse corosync dérive de `known-hosts`
+    et change entre le premier et le second passage, d'où un redémarrage complet
+    (R-22, repro L3a).
+- **Règle 16.3** (D15) : `ansible_python_interpreter: /usr/bin/python3.9` en vars des
+  plays nœuds.
+  - **Raison** : OracleLinux est absent de la table de découverte ; Ansible prend le
+    premier interpréteur trouvé, python3.11 s'il est installé
+    (`AC/executor/interpreter_discovery.py:114-117,160-166`, repro L3a).
