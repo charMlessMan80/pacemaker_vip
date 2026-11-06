@@ -1,8 +1,8 @@
 ---
 # Preflight du projet pacemaker_vip : gardes bloquantes, en lecture seule.
 # Ne configure rien. À lancer depuis la racine du dépôt :
-#   ansible-playbook -i inventories/<env> preflight.yml --ask-vault-pass
-# Le playbook cluster (L3) l'importera en tête (import_playbook).
+#   ansible-playbook -i <inventaire hors dépôt> preflight.yml --ask-vault-pass
+# Le playbook cluster (cluster.yml) l'importe en tête (import_playbook).
 #
 # Play 1 sur localhost : gardes contrôleur, inventaire et variables. Il doit
 # s'exécuter même quand l'inventaire est oublié : avec inventory = /dev/null
@@ -13,7 +13,10 @@
 # (C1-C4, G1) : le play 2 ne s'exécute que si le play 1 a réussi (F-34).
 #
 # tags: always : --tags / --skip-tags ne sautent pas le preflight (seul
-# --skip-tags always le ferait).
+# --skip-tags always le ferait), et G13a les refuse. --skip-tags always,
+# --start-at-task et --step sautent tout le preflight : le marqueur
+# pacemaker_preflight_passed, posé en FIN du play 2, est contrôlé par la
+# garde sans tag de cluster.yml et en tête de tasks/verify.yml.
 
 - name: Preflight contrôleur, inventaire et variables
   hosts: localhost
@@ -45,5 +48,17 @@
   roles:
     - role: pacemaker_preflight
       pacemaker_preflight_stage: nodes
+      tags:
+        - always
+  tasks:
+    # Marqueur de preflight (I1, I2 de la revue L4). Les tâches d'un play
+    # s'exécutent après ses rôles ; any_errors_fatal arrête le play à la
+    # première garde en échec : ce set_fact n'est atteint que si toutes les
+    # gardes des 2 plays ont passé. Lu par cluster.yml (garde sans tag) et
+    # tasks/verify.yml. Il ne protège que contre les erreurs de lancement, pas
+    # contre un contournement délibéré (D25).
+    - name: Preflight complet sur ce nœud (marqueur)
+      ansible.builtin.set_fact:
+        pacemaker_preflight_passed: true
       tags:
         - always

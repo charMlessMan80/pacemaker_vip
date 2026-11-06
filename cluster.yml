@@ -3,7 +3,9 @@
 # Oracle Linux 9 et ressource VIP unique, via le rôle ha_cluster de
 # fedora.linux_system_roles 1.88.9. À lancer depuis la racine du dépôt :
 #   ansible-playbook -i <inventaire hors dépôt> cluster.yml --ask-vault-pass
-# Jamais avec -v, --check, --diff ni --limit (gardes C1, C4, G6 ; R-28).
+# Jamais avec -v, --check, --diff, --limit, --tags, --skip-tags,
+# --start-at-task, --step, ni -e sur une variable du projet (gardes C1, G13c,
+# C4, G6, G13a, garde sans tag ci-dessous, G13b ; R-28, D24).
 #
 # Le rôle redémarre corosync et pacemaker sur les 2 nœuds à la fois quand
 # corosync.conf ou une clé change (CLAUDE.md §9) : tout changement des
@@ -100,6 +102,33 @@
     <<: *pacemaker_ha_cluster
 
   pre_tasks:
+    # SANS tag, volontairement (I1, I2 de la revue L4) : --skip-tags always
+    # saute tout le preflight (tags: always, R-20) mais pas une tâche sans
+    # tag (AC/playbook/taggable.py:30,61-62,78-89 ; repro L4). Le marqueur
+    # n'existe que si le play nœuds du preflight est allé à son terme dans
+    # ce même run (preflight.yml). Sous --tags <x>, cette tâche est sautée,
+    # mais G13a (tag always) a déjà refusé le lancement.
+    # Garde contre les erreurs de lancement, pas contre un contournement
+    # délibéré (D25).
+    - name: Preflight passé dans ce run, sans --skip-tags ni --check
+      ansible.builtin.assert:
+        that:
+          - pacemaker_preflight_passed | default(false) is sameas true
+          - ansible_skip_tags | length == 0
+          - not (ansible_check_mode | bool)
+        fail_msg: >-
+          {{ inventory_hostname }} :
+          {{ 'preflight non exécuté ou incomplet dans ce run (marqueur'
+             ~ ' pacemaker_preflight_passed absent) ; '
+             if not (pacemaker_preflight_passed | default(false)
+                     is sameas true) else '' }}{{
+          '--skip-tags ' ~ (ansible_skip_tags | join(',')) ~ ' ; '
+             if ansible_skip_tags | length > 0 else '' }}{{
+          '--check actif ; ' if ansible_check_mode | bool else ''
+          }}cluster.yml s'exécute en entier, preflight compris : relancer sans
+          --skip-tags, --start-at-task, --step ni --check (CLAUDE.md §9).
+        quiet: true
+
     - name: C5 - variables du rôle telles que déclarées
       ansible.builtin.include_tasks: tasks/declared_vars.yml
 
@@ -110,5 +139,5 @@
     - role: fedora.linux_system_roles.ha_cluster
 
   post_tasks:
-    - name: V1-V5 - état du cluster après déploiement (lecture seule)
+    - name: V1-V6 - état du cluster après déploiement (lecture seule)
       ansible.builtin.include_tasks: tasks/verify.yml

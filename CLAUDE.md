@@ -83,8 +83,12 @@ Abréviations de sources :
 
 ## 5. Inventaire explicite
 
-- **Règle** : l'inventaire est toujours passé avec `-i inventories/<env>`.
-  `ansible.cfg` fixe `inventory = /dev/null`.
+- **Règle** : l'inventaire réel est toujours passé avec `-i <inventaire hors dépôt>`.
+  Il n'est jamais versionné : `.gitignore` ignore `inventories/*` sauf le modèle
+  `inventories/example/` (preuve `git check-ignore -v`, L4b). `ansible.cfg` fixe
+  `inventory = /dev/null`.
+- **Raison (hors dépôt)** : le dépôt a été public jusqu'au 2026-11-06 (D23) ;
+  un `git add -A` sur le contrôleur publierait noms, adresses et fichier Vault.
 - **Raison** : sans réglage, c'est `/etc/ansible/hosts` qui est utilisé
   (`AC/config/base.yml:729-740`). Une valeur vide est résolue en chemin relatif au
   `.cfg` : la racine du dépôt devient l'inventaire (repro L1, F-21).
@@ -139,9 +143,21 @@ Abréviations de sources :
 
 - **Règle** : toute modification qui touche corosync.conf (nom de cluster, transport,
   totem, quorum, liste des nœuds) ou les clés (`ha_cluster_regenerate_keys`) se fait
-  en fenêtre de maintenance, en modifiant `cluster.yml` ou l'inventaire (jamais par
-  `-e`, refusé par C5). **Ni `--check` ni `--diff`** : `--diff` affiche les clés
-  (D18, C4), et `--check` ne simule pas un premier déploiement (R-28).
+  en fenêtre de maintenance, en modifiant `cluster.yml` ou l'inventaire hors dépôt.
+  **Jamais par `-e`** (D24) : G13b refuse toute variable du projet en extra var
+  (`pacemaker_*`, dont les 4 entrées, `vault_pacemaker_*`, `ha_cluster*`,
+  `__ha_cluster*`, `ansible_python_interpreter`) ; C5 refuse en plus une variable
+  `ha_cluster*` non déclarée venue de l'inventaire. **Ni `--check` ni `--diff`** :
+  `--diff` affiche les clés (D18, C4), et `--check` ne simule pas un premier
+  déploiement (R-28, G13c).
+- **Règle 9.1 (options de lancement)** : `preflight.yml` et `cluster.yml` se lancent
+  sans `--start-at-task`, `--step`, `--tags`, `--skip-tags`, `--check`, `--diff`,
+  `--limit`, `-v`, ni `-e` sur une variable du projet. Gardes : G13a (tags), G13b
+  (`-e`), G13c et garde sans tag (`--check`), C4, G6, C1 ; `--skip-tags always`,
+  `--start-at-task` et `--step` sautent tout le preflight : la garde sans tag de
+  `cluster.yml` (marqueur absent, `--skip-tags`) et l'assert du marqueur en tête de
+  `tasks/verify.yml` les arrêtent, au pire en fin de run (§14.5). Résidu :
+  `--skip-tags always,untagged` n'exécute rien et rend 0, sans effet sur les nœuds.
 - **Raison** : si corosync.conf ou une authkey change, le rôle arrête `pacemaker` et
   `corosync` sur **tous** les nœuds à la fois, puis les redémarre
   (`LSR/tasks/shell_pcs/cluster-start-and-reload.yml:24-42`). La VIP est coupée
@@ -172,7 +188,8 @@ Abréviations de sources :
 
 ## 12. Hygiène git
 
-- **Règle** : une branche par série (`l<N>-<sujet>`) et un commit par livrable.
+- **Règle** : une branche par série (`serie<N>-<sujet>` ; série 1 =
+  `serie1-cluster-vip`, livrables L1 à L4b) et un commit par livrable.
   L'intégration dans `main` se fait par merge `--no-ff`, uniquement après validation
   de l'utilisateur. Avant chaque commit, contrôler `git diff --stat` (puis
   `git diff --cached --stat`) : un ajout de contenu ne doit jamais faire diminuer un
@@ -210,6 +227,23 @@ Abréviations de sources :
     (iputils-20210202 `arping.c:562-570,1006-1009`, repro L2, F-29).
 - **Règle 14.4** : chaque garde est démontrée dans les deux sens, nominal et échec
   forcé, avec le message obtenu. Les inventaires de test vivent hors du dépôt.
+- **Règle 14.5** : le play nœuds du preflight se termine par le marqueur
+  `pacemaker_preflight_passed` (`set_fact`, tag `always`). La première tâche du play
+  cluster, **sans tag**, exige ce marqueur, `ansible_skip_tags` vide et pas de
+  `--check` ; `tasks/verify.yml` commence par le même contrôle du marqueur.
+  - **Raison** : `--skip-tags always` saute toutes les tâches `always`, mais pas une
+    tâche sans tag (`AC/playbook/taggable.py:30,61-62,78-89`, repro L4).
+    `--start-at-task` saute tout ce qui précède la tâche nommée, tag `always`
+    compris, et aucune variable n'expose l'option
+    (`AC/executor/play_iterator.py:207-227`, `AC/utils/vars.py:216-223`, repro L4).
+- **Règle 14.6** : une garde lit les options de lancement dans les magic vars
+  (`ansible_run_tags`, `ansible_skip_tags`, `ansible_check_mode`, `ansible_limit`,
+  `ansible_diff_mode`, `ansible_verbosity`), jamais dans une variable qu'un `-e`
+  pourrait poser.
+  - **Raison** : les magic vars sont posées après les extra vars
+    (`AC/vars/manager.py:420,423`) ; un `-e` passe avant toutes les autres
+    variables, y compris vars de tâche, `set_fact` et paramètres de rôle
+    (`AC/vars/manager.py:399-420`, repro L4).
 
 ## 15. Aucune verbosité, aucun --diff, journal protégé
 
@@ -276,7 +310,7 @@ Abréviations de sources :
   - **Raison** : `/var/lib/pcsd` est `%ghost` dans `pcs-0.11.11-2.el9_8.1`, créé par
     systemd (`pcsd.service:13-14`, `StateDirectory=pcsd`, `StateDirectoryMode=0700`) ;
     sans lui le rôle échoue (R-32, constaté sur cible).
-- **Règle 17.4** : après le rôle, V1-V5 lisent l'état réel (crm_mon, corosync-quorumtool,
+- **Règle 17.4** : après le rôle, V1-V6 lisent l'état réel (crm_mon, corosync-quorumtool,
   corosync-cmapctl, corosync-cfgtool, cibadmin), en lecture seule et bornés dans le
   temps. Une boucle `until` s'arrête sur « conforme **ou** tentatives épuisées », puis
   un `assert` échoue avec un message clair.
@@ -288,3 +322,15 @@ Abréviations de sources :
   - **Raison** : la réactivation retire la VIP (adresse ajoutée hors NetworkManager) ;
     Pacemaker ne la repose qu'au moniteur suivant (intervalle 10 s) et laisse un
     `fail-count` (repro L3c, R-34).
+
+## 18. Modèle de menace des gardes (D25)
+
+- **Règle** : les gardes protègent contre les **erreurs de manipulation** (option
+  oubliée ou mal choisie, reprise d'un run interrompu, environnement pollué,
+  variable placée au mauvais endroit). Elles ne protègent pas contre un opérateur
+  root qui veut délibérément les contourner (édition du playbook, faux marqueur
+  en `-e` avec `--skip-tags always`, etc.). Une garde n'est ajoutée que pour une
+  erreur plausible, désignée dans son commentaire.
+- **Raison** : sans cette règle, chaque revue ajoute des couches contre des
+  contournements volontaires, qui compliquent les gardes sans réduire le risque
+  réel (décision utilisateur du 2026-11-06).

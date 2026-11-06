@@ -1,5 +1,5 @@
 ---
-# V1-V5 : état du cluster après le rôle, en LECTURE SEULE, sur chaque nœud.
+# V1-V6 : état du cluster après le rôle, en LECTURE SEULE, sur chaque nœud.
 # Le compteur « changed » du rôle ne prouve rien (CLAUDE.md §10) : on lit
 # l'état effectif.
 #
@@ -12,17 +12,43 @@
 #
 # Aucune commande ne lit de clé ni le mot de passe : crm_mon, cibadmin sur
 # rsc_defaults et la primitive vip, corosync-quorumtool, corosync-cmapctl
-# sur nodelist.node et totem.ip_version uniquement, corosync-cfgtool -n.
+# sur nodelist.node, totem.ip_version et totem.cluster_name uniquement,
+# corosync-cfgtool -n.
+# Non vérifiée : ha_cluster.pcs_address. Elle n'est lisible que dans
+# /var/lib/pcsd/known-hosts, qui contient aussi les jetons d'authentification
+# pcsd ; on ne le lit pas (accepté, revue L4 I7). L'adresse corosync, elle,
+# est vérifiée par V4.
 #
 # Les expressions régulières ne sont jamais coupées en fin de ligne : le
 # pliage YAML (>-) y insérerait une espace ; on concatène avec « ~ ».
 
-- name: V1-V5
+# Marqueur de preflight (preflight.yml, fin du play nœuds). Sous
+# --start-at-task (reprise d'un run), toutes les tâches qui précèdent la
+# tâche nommée sont sautées, tag always compris, et aucune variable n'expose
+# l'option (AC/executor/play_iterator.py:207-227, AC/utils/vars.py:216-223 ;
+# repro L4) : le preflight, C5 et D21 ne s'exécutent pas. Le run échoue
+# alors ici, au pire en fin de run, au lieu de finir en rc=0.
+- name: Preflight passé dans ce run (marqueur)
+  ansible.builtin.assert:
+    that:
+      - pacemaker_preflight_passed | default(false) is sameas true
+    fail_msg: >-
+      {{ inventory_hostname }} : le preflight n'a pas été exécuté jusqu'au
+      bout dans ce run (marqueur pacemaker_preflight_passed absent :
+      --start-at-task, --step ou --skip-tags ?). Le déploiement qui précède
+      n'a pas été gardé. Relancer cluster.yml en entier, sans
+      --start-at-task, --step ni --skip-tags (CLAUDE.md §9).
+    quiet: true
+
+- name: V1-V6
   vars:
     pacemaker_verify_retries: 30
     pacemaker_verify_delay: 2
-    pacemaker_vip_address: >-
-      {{ pacemaker_vip_cidr | ansible.utils.ipaddr('address') }}
+    # Dérivation de G8/N3 (split), indépendante du filtre ipaddr employé par
+    # cluster.yml : V1 recoupe ainsi l'adresse ET le préfixe effectivement
+    # posés (« inet <ip>/<préfixe> », revue L4 I7).
+    pacemaker_vip_address: "{{ pacemaker_vip_cidr.split('/')[0] }}"
+    pacemaker_vip_prefix: "{{ pacemaker_vip_cidr.split('/')[1] }}"
     pacemaker_peer: >-
       {{ ansible_play_hosts_all | difference([inventory_hostname]) | first }}
 
@@ -104,6 +130,15 @@
       {{ 'resource-stickiness' in pacemaker_v5_vip.stdout | default('') }}
     pacemaker_v5_ok: >-
       {{ pacemaker_v5_values == ['1'] and not pacemaker_v5_on_vip }}
+
+    # V6 : nom de cluster chargé par corosync = pacemaker_cluster_name
+    # (revue L4 I7). « totem.cluster_name (str) = <nom> » (corosync-cmapctl
+    # -g, même format que totem.ip_version, F-60).
+    pacemaker_v6_name: >-
+      {{ (pacemaker_v6_out.stdout | default('')
+          | regex_search('(?m)^totem\.cluster_name \(str\) = (\S+)$', '\1')
+          | default([''], true)) | first }}
+    pacemaker_v6_ok: "{{ pacemaker_v6_name == pacemaker_cluster_name }}"
   block:
     - name: V1/V2 - lire l'état du cluster (crm_mon)
       ansible.builtin.command:
@@ -163,7 +198,8 @@
              | map('extract', hostvars, 'pacemaker_v1_node') | unique | list }}
         pacemaker_v1_carriers: >-
           {%- set out = [] -%}
-          {%- set inet = ' inet ' ~ pacemaker_vip_address ~ '/' -%}
+          {%- set inet = ' inet ' ~ pacemaker_vip_address ~ '/'
+                ~ pacemaker_vip_prefix ~ ' ' -%}
           {%- for h in ansible_play_hosts_all -%}
           {%-   if inet in hostvars[h]['pacemaker_v1_ip']['stdout'] -%}
           {%-     set _ = out.append(h) -%}
@@ -175,10 +211,13 @@
           - pacemaker_v1_nodes | length == 1
           - pacemaker_v1_carriers == pacemaker_v1_nodes
         fail_msg: >-
-          VIP {{ pacemaker_vip_address }} : Pacemaker la place sur
-          {{ pacemaker_v1_nodes | join(', ') }}, elle est configurée sur
+          VIP {{ pacemaker_vip_address }}/{{ pacemaker_vip_prefix }} :
+          Pacemaker la place sur {{ pacemaker_v1_nodes | join(', ') }}, elle
+          est configurée avec ce préfixe sur
           {{ pacemaker_v1_carriers | join(', ') | default('aucun nœud', true) }}
-          ({{ pacemaker_vip_nic }}). Attendu : un seul et même nœud.
+          ({{ pacemaker_vip_nic }}). Attendu : un seul et même nœud, adresse et
+          préfixe de pacemaker_vip_cidr (vérifier « ip -4 -o addr show dev
+          {{ pacemaker_vip_nic }} »).
         quiet: true
 
     - name: V3 - lire le quorum (corosync-quorumtool)
@@ -234,6 +273,31 @@
           lien knet connecté entre les pacemaker_node_ip. Une adresse
           dérivée de known-hosts change au passage suivant et redémarre le
           cluster (R-22).
+        quiet: true
+
+    - name: V6 - lire le nom de cluster (cmapctl)
+      ansible.builtin.command:
+        argv: [corosync-cmapctl, -g, totem.cluster_name]
+      register: pacemaker_v6_out
+      changed_when: false
+      failed_when: false
+      retries: "{{ pacemaker_verify_retries }}"
+      delay: "{{ pacemaker_verify_delay }}"
+      until: >-
+        pacemaker_v6_ok
+        or pacemaker_v6_out.attempts >= pacemaker_verify_retries
+
+    - name: V6 - nom de cluster = pacemaker_cluster_name
+      ansible.builtin.assert:
+        that:
+          - pacemaker_v6_ok
+        fail_msg: >-
+          {{ inventory_hostname }} : corosync a chargé le nom de cluster
+          « {{ pacemaker_v6_name | default('(absent)', true) }} »
+          (corosync-cmapctl rc={{ pacemaker_v6_out.rc }}) ; attendu
+          « {{ pacemaker_cluster_name }} » (pacemaker_cluster_name, inventaire
+          hors dépôt). Un changement de nom passe par l'inventaire et
+          redémarre le cluster (CLAUDE.md §9).
         quiet: true
 
     - name: V5 - lire rsc_defaults (cibadmin)

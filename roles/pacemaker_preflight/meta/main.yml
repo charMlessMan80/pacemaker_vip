@@ -1,7 +1,7 @@
 ---
 # Rôle de gardes en lecture seule, exécuté avant le rôle ha_cluster.
-# Aucune dépendance : il est importé en tête de preflight.yml (et du
-# playbook cluster du L3) avec pacemaker_preflight_stage = controller | nodes.
+# Aucune dépendance : il est appelé par preflight.yml, lui-même importé en
+# tête de cluster.yml, avec pacemaker_preflight_stage = controller | nodes.
 galaxy_info:
   role_name: pacemaker_preflight
   author: charMlessMan80

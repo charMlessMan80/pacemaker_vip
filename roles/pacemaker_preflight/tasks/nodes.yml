@@ -2,8 +2,8 @@
 # Gardes NŒUDS (N1-N7), plus G6 rejouée ici. Play sur pacemaker_nodes,
 # gather_facts: true, any_errors_fatal: true, become: true.
 # Lecture seule : faits Ansible, nmcli, arping en mode détection, dnf repoquery.
-# Les commandes portent check_mode: false pour que les gardes s'exécutent aussi
-# sous --check (CLAUDE.md §9) : aucune ne modifie la configuration du nœud.
+# Les commandes portent check_mode: false (lecture seule, sans effet) ; --check
+# est de toute façon refusé dès le play contrôleur (G13c, CLAUDE.md §9).
 # Exception : dnf repoquery peut rafraîchir le cache des métadonnées
 # (/var/cache/dnf), comme tout appel à dnf.
 #
@@ -68,7 +68,7 @@
       (pacemaker_vip_nic) {{ 'est absente' if pacemaker_vip_nic not in
       ansible_facts['interfaces'] else "n'a pas d'IPv4" }}. Interfaces
       présentes : {{ ansible_facts['interfaces'] | sort | join(', ') }}.
-      Corriger pacemaker_vip_nic dans inventories/<env>/group_vars/, ou
+      Corriger pacemaker_vip_nic dans <inventaire hors dépôt>/group_vars/, ou
       configurer une IPv4 statique sur l'interface.
     quiet: true
 
@@ -208,7 +208,7 @@
       {{ ('uname -n vaut « ' ~ ansible_facts['nodename'] ~ ' » : le nom'
       ~ " d'inventaire doit être exactement le nom du nœud (D20), car"
       ~ ' corosync se reconnaît par ce nom (sinon résolution inverse).'
-      ~ " Renommer l'hôte dans inventories/<env>/hosts.yml et y placer"
+      ~ " Renommer l'hôte dans <inventaire hors dépôt>/hosts.yml et y placer"
       ~ " l'adresse SSH dans ansible_host.")
       if inventory_hostname != ansible_facts['nodename']
       else ('pacemaker_node_ip = ' ~ pacemaker_node_ip ~ ", alors que l'IPv4"
@@ -218,7 +218,7 @@
       ~ (ansible_facts[pacemaker_preflight_nic_key]['ipv4_secondaries']
       | default([]) | map(attribute='address') | join(', ')
       | default('aucune', true)) ~ ').'
-      ~ ' Corriger pacemaker_node_ip dans inventories/<env>/hosts.yml'
+      ~ ' Corriger pacemaker_node_ip dans <inventaire hors dépôt>/hosts.yml'
       ~ ' (D10).') }}
     quiet: true
 
@@ -300,7 +300,7 @@
     # LSR/vars/RedHat.yml:13-24 (essentiels et pile complète). Les paquets de
     # fencing (fence-agents-all, fence-virt, l.48) ne viennent que du défaut
     # de ha_cluster_fence_agent_packages (LSR/defaults/main.yml:17,
-    # LSR/tasks/main.yml:58-61), que le playbook cluster fixera à [] (D19).
+    # LSR/tasks/main.yml:58-61), que cluster.yml fixe à [] (D19).
     pacemaker_preflight_packages:
       - pcs
       - corosync-qnetd

@@ -11,3 +11,8 @@ vault_password*
 .ansible/
 __pycache__/
 *.pyc
+
+# Inventaires réels : TOUJOURS hors du dépôt (dépôt longtemps public, D23 ;
+# CLAUDE.md §5). Seul le modèle inventories/example/ est versionné.
+inventories/*
+!inventories/example/

@@ -1,5 +1,6 @@
 ---
-# Gardes CONTRÔLEUR (G1-G4) et INVENTAIRE / VARIABLES (G5-G10).
+# Gardes OPTIONS DE LANCEMENT (G13), CONTRÔLEUR (G1-G4, C1-C4) et
+# INVENTAIRE / VARIABLES (G5-G12).
 # Play sur localhost, connection: local. Aucune écriture : lectures de
 # fichiers du dépôt et une commande Python sans effet.
 #
@@ -13,6 +14,92 @@
 # quelle, sous forme de texte brut, et "is defined" vaut true. Les gardes
 # testent donc la variable source (G10) et refusent un texte qui contient
 # encore un gabarit.
+
+# ------------------------------------------------- options de lancement (G13)
+
+# G13a (R-35). ansible_run_tags et ansible_skip_tags sont des variables
+# d'options (AC/utils/vars.py:211-230), posées en magic vars APRÈS les extra
+# vars (AC/vars/manager.py:420,423) : un -e ne les masque pas. Sans --tags,
+# ansible_run_tags vaut ['all'] (AC/cli/__init__.py:403-409) ; sans
+# --skip-tags, ansible_skip_tags vaut [] (AC/config/base.yml:1927-1935).
+# Le rôle ha_cluster n'a aucun tag : sous --tags <x>, cluster.yml finirait en
+# rc=0 après le seul preflight, sans rien déployer ni vérifier (repro L3c).
+# --skip-tags always saute cette garde elle-même : la garde sans tag de
+# cluster.yml couvre ce cas (R-20).
+- name: G13a | Ni --tags ni --skip-tags
+  ansible.builtin.assert:
+    that:
+      - ansible_run_tags == ['all']
+      - ansible_skip_tags | length == 0
+    fail_msg: >-
+      Tags demandés : --tags {{ ansible_run_tags | join(',') }}
+      --skip-tags
+      {{ ansible_skip_tags | join(',') | default('(aucun)', true) }}.
+      Le preflight et le playbook cluster s'exécutent toujours en entier :
+      le rôle ha_cluster n'a aucun tag, et --tags ferait terminer cluster.yml
+      sans rien déployer ni vérifier (R-35). Relancer sans --tags ni
+      --skip-tags (ni ANSIBLE_RUN_TAGS / ANSIBLE_SKIP_TAGS).
+    quiet: true
+
+# G13b (D24, I3 de la revue L4). Les extra vars priment sur tout, y compris
+# les vars de tâche et de bloc, set_fact, include_vars et les paramètres de
+# rôle (AC/vars/manager.py:399-420 ; repro L4b) : un -e sur une variable du
+# projet contourne une garde ou une vérification (pacemaker_v1_ok,
+# pacemaker_preflight_log...), change une entrée validée (D24 : jamais de -e
+# sur pacemaker_cluster_name, pacemaker_vip_cidr, pacemaker_vip_nic,
+# pacemaker_node_ip ni la variable Vault) ou une variable du rôle hors C5
+# (__ha_cluster_*).
+# Origine d'une variable : AUCUNE variable ne l'expose. Les sources ne sont
+# suivies qu'avec DEFAULT_DEBUG (AC/vars/manager.py:182-191), refusé par C2.
+# On lit donc hostvars['localhost'] (localhost implicite, hors inventaire :
+# AC/inventory/data.py:80-102). Repro L4b : y apparaissent les extra vars, mais
+# aussi group_vars/all et host_vars/localhost ; jamais les variables du groupe
+# pacemaker_nodes ni des hôtes. Règle la plus sûre retenue : tout nom du
+# projet vu sur localhost est refusé, quelle que soit sa source. Limite :
+# une variable du projet placée dans group_vars/all ou host_vars/localhost
+# est refusée elle aussi (la placer dans group_vars/pacemaker_nodes).
+# ansible_python_interpreter est toujours posé sur le localhost implicite,
+# à sys.executable (AC/inventory/data.py:91-97) = ansible_playbook_python
+# (AC/vars/manager.py:455) : refusé seulement s'il en diffère.
+# Le contrôle porte sur hostvars, avant tout set_fact de ce play.
+# Messages : noms seuls, jamais de valeur (la variable Vault en fait partie).
+- name: G13b | Aucune variable du projet en -e
+  ansible.builtin.assert:
+    that:
+      - pacemaker_preflight_g13_names | length == 0
+    fail_msg: >-
+      Variables du projet définies pour localhost, donc en -e (ou dans
+      group_vars/all, host_vars/localhost) :
+      {{ pacemaker_preflight_g13_names | join(', ') }} (valeurs jamais
+      affichées). Aucune variable du projet ne se passe en -e (D24) : toute
+      modification passe par l'inventaire hors dépôt
+      (group_vars/pacemaker_nodes, hosts.yml) ou par cluster.yml, en fenêtre
+      de maintenance (CLAUDE.md §9). Relancer sans ces -e.
+    quiet: true
+  vars:
+    pacemaker_preflight_g13_names: >-
+      {{ ((hostvars['localhost'].keys()
+           | select('match', '^((vault_)?pacemaker_|_*ha_cluster)')
+           | list)
+          + (['ansible_python_interpreter']
+             if (hostvars['localhost']['ansible_python_interpreter']
+                 | default(ansible_playbook_python))
+                != ansible_playbook_python
+             else []))
+         | sort }}
+
+# G13c (I8 de la revue L4, CLAUDE.md §9, R-28). Sous --check, les commandes
+# de lecture sont sautées avec rc=0 (AC/modules/command.py:319-331 ; repro
+# L4) et le rôle ne déploie rien : le premier déploiement ne se simule pas.
+- name: G13c | Pas de --check
+  ansible.builtin.assert:
+    that:
+      - not (ansible_check_mode | bool)
+    fail_msg: >-
+      --check est actif : refusé (CLAUDE.md §9). Un premier déploiement ne se
+      simule pas (R-28) et les vérifications seraient sautées. Relancer sans
+      --check.
+    quiet: true
 
 # ---------------------------------------------------------------- contrôleur
 
@@ -528,7 +615,7 @@
       ' hôte(s) : ' ~ (groups['pacemaker_nodes'] | join(', ')))
       if 'pacemaker_nodes' in groups else 'absent' }} ; inventaire lu :
       {{ ansible_inventory_sources | default([]) | join(', ') }}. Passer
-      -i inventories/<env> (ansible.cfg fixe inventory = /dev/null,
+      -i <inventaire hors dépôt> (ansible.cfg fixe inventory = /dev/null,
       CLAUDE.md §5) et déclarer exactement 2 hôtes dans le groupe
       (CLAUDE.md §6).
     quiet: true
@@ -583,7 +670,8 @@
       else 'non définie' }} :
       attendu une chaîne de 1 à 32 caractères parmi A-Z a-z 0-9 _ -
       (contrainte de pcs 0.11.11), différente de « my-cluster » (défaut du
-      rôle). À renseigner dans inventories/<env>/group_vars/pacemaker_nodes.yml.
+      rôle). À renseigner dans
+      <inventaire hors dépôt>/group_vars/pacemaker_nodes.yml.
     quiet: true
   loop: "{{ groups['pacemaker_nodes'] }}"
 
@@ -604,7 +692,7 @@
       else 'non définie' }} :
       attendu a.b.c.d/préfixe, par exemple <IP>/24 (D3). Sans « / », le filtre
       ipaddr en ferait un /32 sans erreur (F-19). À renseigner dans
-      inventories/<env>/group_vars/pacemaker_nodes.yml.
+      <inventaire hors dépôt>/group_vars/pacemaker_nodes.yml.
     quiet: true
   loop: "{{ groups['pacemaker_nodes'] }}"
 
@@ -628,7 +716,7 @@
       {{ pacemaker_preflight_vip | to_json }} :
       adresse IPv4 invalide (4 octets décimaux de 0 à 255, sans zéro initial)
       ou préfixe hors de 1 à 30. Corriger dans
-      inventories/<env>/group_vars/pacemaker_nodes.yml.
+      <inventaire hors dépôt>/group_vars/pacemaker_nodes.yml.
     quiet: true
   loop: "{{ groups['pacemaker_nodes'] }}"
   vars:
@@ -653,7 +741,7 @@
       ou de broadcast
       ({{ pacemaker_preflight_vip | ansible.utils.ipaddr('broadcast') }})
       du sous-réseau. Choisir une adresse d'hôte libre dans
-      inventories/<env>/group_vars/pacemaker_nodes.yml.
+      <inventaire hors dépôt>/group_vars/pacemaker_nodes.yml.
     quiet: true
   loop: "{{ groups['pacemaker_nodes'] }}"
   vars:
@@ -673,7 +761,7 @@
       if hostvars[item].pacemaker_vip_nic is defined
       else 'non définie' }} :
       attendu le nom de l'interface qui portera la VIP sur les nœuds (D3).
-      À renseigner dans inventories/<env>/group_vars/pacemaker_nodes.yml.
+      À renseigner dans <inventaire hors dépôt>/group_vars/pacemaker_nodes.yml.
     quiet: true
   loop: "{{ groups['pacemaker_nodes'] }}"
 
@@ -699,8 +787,9 @@
       vault_pacemaker_hacluster_password absente, nulle ou vide pour
       {{ item }} (la valeur n'est jamais affichée). La définir dans un fichier
       chiffré par ansible-vault chargé pour le groupe pacemaker_nodes de
-      inventories/<env>/ (D5, CLAUDE.md §11), et fournir le mot de passe Vault
-      (--ask-vault-pass, ou --vault-password-file vers un fichier hors dépôt).
+      <inventaire hors dépôt>/ (D5, CLAUDE.md §11), et fournir le mot de passe
+      Vault (--ask-vault-pass, ou --vault-password-file vers un fichier hors
+      dépôt).
     quiet: true
   loop: "{{ groups['pacemaker_nodes'] }}"
 
@@ -742,8 +831,8 @@
       Les variables du projet diffèrent entre {{ pacemaker_preflight_n1 }} et
       {{ pacemaker_preflight_n2 }} (condition en échec ci-dessus ; les
       mots de passe ne sont jamais affichés). Les définir une seule fois dans
-      inventories/<env>/group_vars/pacemaker_nodes.yml, sans surcharge dans
-      host_vars.
+      <inventaire hors dépôt>/group_vars/pacemaker_nodes.yml, sans surcharge
+      dans host_vars.
     quiet: true
   vars:
     pacemaker_preflight_n1: "{{ groups['pacemaker_nodes'][0] }}"
@@ -787,7 +876,7 @@
       la VIP {{ pacemaker_preflight_vip_ip }}, dans le réseau
       {{ pacemaker_preflight_vip | ansible.utils.ipaddr('network/prefix') }}
       et ni son adresse de réseau ni son broadcast (D10). À renseigner par hôte
-      dans inventories/<env>/hosts.yml.
+      dans <inventaire hors dépôt>/hosts.yml.
     quiet: true
   loop: "{{ groups['pacemaker_nodes'] }}"
   vars:
@@ -811,7 +900,7 @@
       {{ hostvars[groups['pacemaker_nodes'][0]].pacemaker_node_ip }} pour
       {{ groups['pacemaker_nodes'][0] }} et {{ groups['pacemaker_nodes'][1] }} :
       chaque nœud a sa propre adresse (D10). Corriger
-      inventories/<env>/hosts.yml.
+      <inventaire hors dépôt>/hosts.yml.
     quiet: true
 
 # G12 (D17). Variables d'hôte qui désactivent la vérification des clés SSH :
@@ -829,7 +918,8 @@
     fail_msg: >-
       {{ item }} : variables d'inventaire qui désactivent la vérification des
       clés d'hôte SSH : {{ pacemaker_preflight_g12_bad | join(', ') }}.
-      Les retirer de inventories/<env>/ (hosts.yml, group_vars, host_vars) :
+      Les retirer de <inventaire hors dépôt>/ (hosts.yml, group_vars,
+      host_vars) :
       les clés des nœuds doivent être vérifiées (StrictHostKeyChecking=yes,
       UserKnownHostsFile réel).
     quiet: true
