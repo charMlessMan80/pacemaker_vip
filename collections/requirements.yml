@@ -1,0 +1,35 @@
+---
+# Collections du projet, versions EXACTES.
+# Installation (depuis la racine du dépôt) :
+#   ansible-galaxy collection install \
+#     -r collections/requirements.yml -p collections
+#
+# Critère de choix : la version la plus récente dont meta/runtime.yml
+# (requires_ansible) accepte ansible-core 2.14.18
+# (API Galaxy + tarballs lus, L0 Q1/Q9).
+# Les dépendances déclarées par fedora.linux_system_roles 1.88.9 sont "*"
+# (MANIFEST.json) : sans épinglage, ansible-galaxy installe
+# community.general 14.0.0 (>=2.19.0) et ansible.posix 2.2.2 (>=2.16.0)
+# sans avertissement (repro L0).
+# Les sha256 des tarballs sont consignés dans docs/pacemaker-facts.md.
+collections:
+  # requires_ansible ">=2.14.0" ; 1.89.0 exige ">=2.15.0".
+  - name: fedora.linux_system_roles
+    version: "==1.88.9"
+  # requires_ansible ">=2.14.0" ; 5.0.0 exige ">=2.15.0".
+  # Filtres ipaddr (preflight L2).
+  - name: ansible.utils
+    version: "==4.1.0"
+  # Dépendance déclarée de fedora.linux_system_roles.
+  # ">=2.14.0" ; 1.6.2 exige ">=2.15.0".
+  - name: ansible.posix
+    version: "==1.6.1"
+  # Dépendance déclarée de fedora.linux_system_roles.
+  # ">=2.13.0" ; 10.0.0 exige ">=2.15.0".
+  - name: community.general
+    version: "==9.5.13"
+  # Dépendance déclarée de fedora.linux_system_roles, non utilisée par
+  # ha_cluster ; épinglée pour qu'ansible-galaxy ne tire pas la dernière.
+  # requires_ansible ">=2.8".
+  - name: containers.podman
+    version: "==1.21.2"

@@ -1,0 +1,29 @@
+---
+# Point d'entrée du preflight. Le même rôle sert deux plays :
+#   - pacemaker_preflight_stage: controller  (play sur localhost)
+#   - pacemaker_preflight_stage: nodes       (play sur pacemaker_nodes)
+# Voir preflight.yml. Aucune valeur par défaut : une étape absente ou inconnue
+# fait échouer le play.
+#
+# apply: tags: always : les gardes incluses portent le tag always, donc
+# --tags / --skip-tags ne les sautent pas (repro L2 : « --tags foo » et
+# « --skip-tags foo » les exécutent). Le rôle doit aussi être appelé avec
+# tags: always (preflight.yml) pour que l'inclusion elle-même s'exécute.
+
+- name: Étape du preflight demandée
+  ansible.builtin.assert:
+    that:
+      - pacemaker_preflight_stage is defined
+      - pacemaker_preflight_stage in ['controller', 'nodes']
+    fail_msg: >-
+      pacemaker_preflight_stage doit valoir 'controller' (play sur localhost)
+      ou 'nodes' (play sur pacemaker_nodes). Corriger l'appel du rôle dans le
+      playbook (voir preflight.yml).
+    quiet: true
+
+- name: Gardes de l'étape demandée
+  ansible.builtin.include_tasks:
+    file: "{{ pacemaker_preflight_stage }}.yml"
+    apply:
+      tags:
+        - always

@@ -1,0 +1,19 @@
+---
+# Rôle de gardes en lecture seule, exécuté avant le rôle ha_cluster.
+# Aucune dépendance : il est appelé par preflight.yml, lui-même importé en
+# tête de cluster.yml, avec pacemaker_preflight_stage = controller | nodes.
+galaxy_info:
+  role_name: pacemaker_preflight
+  author: charMlessMan80
+  description: >-
+    Gardes bloquantes (contrôleur, inventaire, variables, nœuds) avant la
+    création d'un cluster Pacemaker à 2 nœuds Oracle Linux 9 portant une VIP.
+  # À VÉRIFIER : licence du dépôt (aucun fichier LICENSE à ce jour).
+  license: "À VÉRIFIER"
+  # ansible-core 2.14.18 sur le contrôleur (D1, docs/pacemaker-facts.md F-02).
+  min_ansible_version: "2.14"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+dependencies: []

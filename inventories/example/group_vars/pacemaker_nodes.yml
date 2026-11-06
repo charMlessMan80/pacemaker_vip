@@ -1,0 +1,27 @@
+---
+# Variables du projet pour le groupe pacemaker_nodes.
+# Elles sont VOLONTAIREMENT laissées sans valeur (null) : le preflight (L2)
+# doit échouer tant qu'elles ne sont pas renseignées dans un inventaire réel.
+#
+# Placement : group_vars/ à côté de hosts.yml, fichier nommé comme le groupe.
+# Un fichier mal placé n'est pas chargé, et aucune erreur n'est émise.
+# Vérification :
+#   ansible-inventory -i inventories/example --host noeud-factice-1.invalid
+
+# Nom du cluster Pacemaker. Le défaut du rôle (« my-cluster »,
+# fedora.linux_system_roles 1.88.9 roles/ha_cluster/defaults/main.yml:28)
+# ne doit pas être utilisé.
+pacemaker_cluster_name:
+
+# VIP au format CIDR a.b.c.d/préfixe, dans le même sous-réseau que les
+# nœuds (D3).
+pacemaker_vip_cidr:
+
+# Interface réseau qui porte la VIP sur chaque nœud (D3).
+pacemaker_vip_nic:
+
+# Mot de passe de l'utilisateur hacluster : il vient UNIQUEMENT d'Ansible
+# Vault (D5). La variable vault_pacemaker_hacluster_password est à définir
+# dans un fichier chiffré de l'inventaire réel. Aucun fichier Vault n'est
+# fourni ici.
+pacemaker_hacluster_password: "{{ vault_pacemaker_hacluster_password }}"

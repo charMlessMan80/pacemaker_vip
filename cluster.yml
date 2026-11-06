@@ -1,0 +1,163 @@
+---
+# Playbook cluster du projet pacemaker_vip : cluster Pacemaker à 2 nœuds
+# Oracle Linux 9 et ressource VIP unique, via le rôle ha_cluster de
+# fedora.linux_system_roles 1.88.9. À lancer depuis la racine du dépôt :
+#   ansible-playbook -i <inventaire hors dépôt> cluster.yml --ask-vault-pass
+# Jamais avec -v, --check, --diff, --limit, --tags, --skip-tags,
+# --start-at-task, --step, ni -e sur une variable du projet (gardes C1, G13c,
+# C4, G6, G13a, garde sans tag ci-dessous, G13b ; R-28, D24).
+#
+# Le rôle redémarre corosync et pacemaker sur les 2 nœuds à la fois quand
+# corosync.conf ou une clé change (CLAUDE.md §9) : tout changement des
+# variables ci-dessous se fait en fenêtre de maintenance.
+
+# CLAUDE.md §14.1 : le preflight en tête. Si une garde échoue, rien ne
+# s'exécute sur les nœuds (F-34).
+- name: Preflight
+  ansible.builtin.import_playbook: preflight.yml
+
+- name: Cluster Pacemaker 2 nœuds et VIP
+  hosts: pacemaker_nodes
+  become: true
+  any_errors_fatal: true
+  gather_facts: true
+  vars:
+    # D15 (F-44) : interpréteur fixe, comme au play 2 du preflight.
+    ansible_python_interpreter: /usr/bin/python3.9
+
+    # Source UNIQUE des variables du rôle. L'ancre &pacemaker_ha_cluster est
+    # fusionnée au niveau du play par la clé « << » ci-dessous (clé de
+    # fusion YAML, gérée par AC/parsing/yaml/constructor.py:58) : le rôle lit
+    # les variables ha_cluster_* de premier niveau, et la garde C5
+    # (tasks/declared_vars.yml) compare chacune à ce dictionnaire. Un -e qui
+    # écrase une variable de premier niveau ne change pas ce dictionnaire.
+    # Syntaxes : README du rôle (LSR/README.md, sections citées).
+    pacemaker_ha_cluster_declared: &pacemaker_ha_cluster
+      # LSR/README.md:315 ; défaut « my-cluster » refusé par G7.
+      ha_cluster_cluster_name: "{{ pacemaker_cluster_name }}"
+      # D5 : vient de Vault (G10) ; LSR/README.md:156.
+      ha_cluster_hacluster_password: "{{ pacemaker_hacluster_password }}"
+      # CLAUDE.md §7 : toujours explicites (F-04, F-15) ; LSR/README.md:61,
+      # 75, 95, 115, 123, 275.
+      ha_cluster_enable_repos: false
+      ha_cluster_manage_firewall: false
+      ha_cluster_manage_selinux: false
+      ha_cluster_cluster_present: true
+      ha_cluster_regenerate_keys: false
+      ha_cluster_start_on_boot: true
+      # D19 : aucun paquet de fencing (LSR/README.md:141). fence_xvm.key reste
+      # distribuée sur x86_64 (R-33, accepté D22).
+      ha_cluster_fence_agent_packages: []
+      # D10, D20 : nom de nœud = nom d'inventaire (= uname -n, N7) ; adresses
+      # pcs et corosync = pacemaker_node_ip (G11, N7 ; R-22). Variable de
+      # play, rendue sur chaque hôte : le rôle la lit localement
+      # (LSR/tasks/shell_pcs/check-and-prepare-role-variables.yml:5,32-40)
+      # et n'en lit par hostvars que les set_fact dérivés
+      # (__ha_cluster_node_name, __ha_cluster_local_node ; hostvars ne
+      # contient pas les play vars, repro L3c). LSR/README.md:1456.
+      ha_cluster:
+        node_name: "{{ inventory_hostname }}"
+        pcs_address: "{{ pacemaker_node_ip }}"
+        corosync_addresses:
+          - "{{ pacemaker_node_ip }}"
+      # D9, D14 : knet, lien unique, IPv4 (LSR/README.md:321).
+      ha_cluster_transport:
+        type: knet
+        options:
+          - name: ip_version
+            value: ipv4
+      # D8 : wait_for_all désactivé ; pcs n'accepte que "0"/"1"
+      # (LSR/README.md:396).
+      ha_cluster_quorum:
+        options:
+          - name: wait_for_all
+            value: "0"
+      # D2, CLAUDE.md §8 : sans fencing, stonith-enabled doit être déclaré
+      # (LSR/README.md:597 ; F-07, F-11).
+      ha_cluster_cluster_properties:
+        - attrs:
+            - name: stonith-enabled
+              value: "false"
+      # D13 : la purge du rôle effacerait la valeur du build OL9 (R-26)
+      # (LSR/README.md:850-871 : meta_attrs, liste d'ensembles d'attrs).
+      ha_cluster_resource_defaults:
+        meta_attrs:
+          - attrs:
+              - name: resource-stickiness
+                value: "1"
+      # D3, D20 : ressource « vip » (LSR/README.md:616 ; agent IPaddr2, F-14).
+      ha_cluster_resource_primitives:
+        - id: vip
+          agent: ocf:heartbeat:IPaddr2
+          instance_attrs:
+            - attrs:
+                - name: ip
+                  value: >-
+                    {{ pacemaker_vip_cidr | ansible.utils.ipaddr('address') }}
+                - name: cidr_netmask
+                  value: >-
+                    {{ pacemaker_vip_cidr | ansible.utils.ipaddr('prefix') }}
+                - name: nic
+                  value: "{{ pacemaker_vip_nic }}"
+    <<: *pacemaker_ha_cluster
+
+  pre_tasks:
+    # SANS tag, volontairement (I1, I2 de la revue L4) : --skip-tags always
+    # saute tout le preflight (tags: always, R-20) mais pas une tâche sans
+    # tag (AC/playbook/taggable.py:30,61-62,78-89 ; repro L4). Le marqueur
+    # n'existe que si le play nœuds du preflight est allé à son terme dans
+    # ce même run (preflight.yml). Sous --tags <x>, cette tâche est sautée,
+    # mais G13a (tag always) a déjà refusé le lancement.
+    # Garde contre les erreurs de lancement, pas contre un contournement
+    # délibéré (D25).
+    - name: Preflight passé dans ce run, sans --skip-tags ni --check
+      ansible.builtin.assert:
+        that:
+          - pacemaker_preflight_passed | default(false) is sameas true
+          - ansible_skip_tags | length == 0
+          - not (ansible_check_mode | bool)
+        fail_msg: >-
+          {{ inventory_hostname }} :
+          {{ 'preflight non exécuté ou incomplet dans ce run (marqueur'
+             ~ ' pacemaker_preflight_passed absent) ; '
+             if not (pacemaker_preflight_passed | default(false)
+                     is sameas true) else '' }}{{
+          '--skip-tags ' ~ (ansible_skip_tags | join(',')) ~ ' ; '
+             if ansible_skip_tags | length > 0 else '' }}{{
+          '--check actif ; ' if ansible_check_mode | bool else ''
+          }}cluster.yml s'exécute en entier, preflight compris : relancer sans
+          --skip-tags, --start-at-task, --step ni --check (CLAUDE.md §9).
+        quiet: true
+
+    - name: C5 - variables du rôle telles que déclarées
+      ansible.builtin.include_tasks: tasks/declared_vars.yml
+
+    # L4c. Condition des tâches qui MODIFIENT les nœuds (D21 et le rôle).
+    # --start-at-task saute tout ce qui précède la tâche nommée, preflight,
+    # G6, garde sans tag et C5 compris (F-64). Une reprise du type
+    # « --start-at-task <tâche du rôle> --limit <un nœud> » déploierait alors
+    # un corosync.conf à 1 nœud et redémarrerait le cluster (F-06, F-08).
+    # Un when posé ici est hérité par chaque tâche (y compris celles des
+    # include_tasks du rôle) et réévalué à chaque tâche, même quand le run
+    # commence au milieu (F-68). Le saut n'est jamais silencieux : le
+    # marqueur absent fait échouer l'assert en tête de tasks/verify.yml.
+    # import_tasks (statique) et non include_tasks : sinon --start-at-task
+    # ne trouve pas les tâches D21 (« No matching task », rc=0, F-68).
+    - name: D21 - répertoire d'état de pcsd
+      ansible.builtin.import_tasks: tasks/pcsd_state_dir.yml
+      when: &pacemaker_nodes_change_ok
+        - pacemaker_preflight_passed | default(false) is sameas true
+        - (ansible_play_hosts_all | sort) == (groups['pacemaker_nodes'] | sort)
+        - not (ansible_check_mode | bool)
+
+  roles:
+    # when sur l'entrée roles: (et non import_role sous tasks:) : même
+    # position dans le play, même vidage des handlers ; le when est copié
+    # sur le rôle (AC/playbook/role/definition.py:205-229,
+    # AC/playbook/role/__init__.py:201-204) puis hérité (F-68).
+    - role: fedora.linux_system_roles.ha_cluster
+      when: *pacemaker_nodes_change_ok
+
+  post_tasks:
+    - name: V1-V6 - état du cluster après déploiement (lecture seule)
+      ansible.builtin.include_tasks: tasks/verify.yml

@@ -1,0 +1,364 @@
+---
+# Gardes NŒUDS (N1-N7), plus G6 rejouée ici. Play sur pacemaker_nodes,
+# gather_facts: true, any_errors_fatal: true, become: true.
+# Lecture seule : faits Ansible, nmcli, arping en mode détection, dnf repoquery.
+# Les commandes portent check_mode: false (lecture seule, sans effet) ; --check
+# est de toute façon refusé dès le play contrôleur (G13c, CLAUDE.md §9).
+# Exception : dnf repoquery peut rafraîchir le cache des métadonnées
+# (/var/cache/dnf), comme tout appel à dnf.
+#
+# Les variables pacemaker_* ont été validées par le play contrôleur (G7-G11).
+
+# G6, côté nœuds. Sous --limit sans localhost, le play contrôleur est sauté
+# (« no hosts matched ») ; cette garde est alors la seule à s'exécuter.
+# ansible_play_hosts_all est réduit par --limit (voir controller.yml, G6) :
+# on le compare donc à groups, qui ne l'est pas. Un nœud injoignable pendant
+# la collecte des faits arrête le play (any_errors_fatal) avant cette tâche.
+- name: G6 | Play complet sur les 2 nœuds, sans --limit
+  ansible.builtin.assert:
+    that:
+      - ansible_limit is not defined
+      - groups['pacemaker_nodes'] | length == 2
+      - (ansible_play_hosts_all | sort) == (groups['pacemaker_nodes'] | sort)
+      - (ansible_play_hosts | sort) == (groups['pacemaker_nodes'] | sort)
+    fail_msg: >-
+      Play réduit à [{{ ansible_play_hosts | join(', ') }}] sur
+      [{{ groups['pacemaker_nodes'] | join(', ') }}]{{
+      (' (--limit ' ~ ansible_limit ~ ')') if ansible_limit is defined
+      else '' }}. Le preflight et le playbook
+      cluster s'exécutent sur les 2 nœuds ensemble, joignables, sans --limit
+      (F-06, CLAUDE.md §6).
+    quiet: true
+
+# N1 (F-04). distribution = OracleLinux sur OL9
+# (AC/module_utils/facts/system/distribution.py:58,512-513).
+- name: N1 | Oracle Linux 9
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'OracleLinux'
+      - ansible_facts['distribution_major_version'] == '9'
+    fail_msg: >-
+      {{ inventory_hostname }} : {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }} ; attendu OracleLinux 9.
+      Les faits du projet (rôle ha_cluster sur OL9, paquets) ne valent que
+      pour OL9 (F-04, F-17). Vérifier l'inventaire.
+    quiet: true
+
+# Valeurs dérivées, sans secret. Clé de fait de l'interface : les « - » du nom
+# deviennent « _ » (AC/module_utils/facts/namespace.py:41,49-51), les « : »
+# aussi (AC/module_utils/facts/network/linux.py:283-288).
+- name: N2-N5 | Valeurs dérivées de pacemaker_vip_cidr et pacemaker_vip_nic
+  ansible.builtin.set_fact:
+    pacemaker_preflight_vip_ip: "{{ pacemaker_vip_cidr.split('/')[0] }}"
+    pacemaker_preflight_vip_prefix: "{{ pacemaker_vip_cidr.split('/')[1] }}"
+    pacemaker_preflight_nic_key: >-
+      {{ pacemaker_vip_nic | replace('-', '_') | replace(':', '_') }}
+
+# N2 (F-14). IPaddr2 avec nic exige une IP statique, non gérée par le
+# cluster, sur l'interface (RA/heartbeat/IPaddr2:163-206).
+- name: N2 | Interface pacemaker_vip_nic présente avec une IPv4
+  ansible.builtin.assert:
+    that:
+      - pacemaker_vip_nic in ansible_facts['interfaces']
+      - ansible_facts[pacemaker_preflight_nic_key] is defined
+      - ansible_facts[pacemaker_preflight_nic_key]['ipv4'] is defined
+      - ansible_facts[pacemaker_preflight_nic_key]['ipv4']['address'] is defined
+    fail_msg: >-
+      {{ inventory_hostname }} : l'interface « {{ pacemaker_vip_nic }} »
+      (pacemaker_vip_nic) {{ 'est absente' if pacemaker_vip_nic not in
+      ansible_facts['interfaces'] else "n'a pas d'IPv4" }}. Interfaces
+      présentes : {{ ansible_facts['interfaces'] | sort | join(', ') }}.
+      Corriger pacemaker_vip_nic dans <inventaire hors dépôt>/group_vars/, ou
+      configurer une IPv4 statique sur l'interface.
+    quiet: true
+
+# N2 (suite). « Statique » est établi par NetworkManager : profil actif sur
+# l'interface, état « connected » (pas « connected (externally) », qui
+# désigne une configuration faite hors de NetworkManager), et
+# ipv4.method = manual. Lecture seule (nmcli device show, connection show).
+- name: N2 | Lire le profil NetworkManager de l'interface
+  ansible.builtin.command:
+    argv:
+      - nmcli
+      - --escape
+      - "no"
+      - --get-values
+      - GENERAL.CONNECTION,GENERAL.STATE
+      - device
+      - show
+      - "{{ pacemaker_vip_nic }}"
+  environment:
+    LC_ALL: C
+  register: pacemaker_preflight_nm_device
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: N2 | Lire la méthode IPv4 du profil actif
+  ansible.builtin.command:
+    argv:
+      - nmcli
+      - --escape
+      - "no"
+      - --get-values
+      - ipv4.method
+      - connection
+      - show
+      - "{{ pacemaker_preflight_nm_device.stdout_lines[0] }}"
+  environment:
+    LC_ALL: C
+  register: pacemaker_preflight_nm_method
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - pacemaker_preflight_nm_device.rc == 0
+    - pacemaker_preflight_nm_device.stdout_lines | length == 2
+    - pacemaker_preflight_nm_device.stdout_lines[0] | length > 0
+
+- name: N2 | IPv4 statique gérée par NetworkManager
+  ansible.builtin.assert:
+    that:
+      - pacemaker_preflight_nm_device.rc == 0
+      - pacemaker_preflight_nm_device.stdout_lines | length == 2
+      - pacemaker_preflight_nm_device.stdout_lines[1] == '100 (connected)'
+      - pacemaker_preflight_nm_method.rc == 0
+      - pacemaker_preflight_nm_method.stdout == 'manual'
+    fail_msg: >-
+      {{ inventory_hostname }} : impossible d'établir une IPv4 statique sur
+      {{ pacemaker_vip_nic }}. nmcli device show :
+      rc={{ pacemaker_preflight_nm_device.rc }},
+      {{ pacemaker_preflight_nm_device.stdout_lines | join(' / ') }}
+      {{ pacemaker_preflight_nm_device.stderr | default('') }} ; ipv4.method :
+      {{ pacemaker_preflight_nm_method.stdout | default('non lu') }}. Attendu :
+      un profil NetworkManager actif (état « 100 (connected) ») avec
+      ipv4.method manual sur l'interface, car IPaddr2 exige une IP statique
+      (F-14).
+    quiet: true
+
+# N3 (R-08, F-14). Avec nic et cidr_netmask fournis, IPaddr2 ne vérifie pas
+# la route (RA/heartbeat/findif.sh:213-244) : la VIP doit être dans le réseau
+# de l'IPv4 principale de l'interface, avec le même préfixe.
+- name: N3 | VIP dans le réseau de l'interface, même préfixe
+  ansible.builtin.assert:
+    that:
+      - >-
+        pacemaker_preflight_vip_prefix | int
+        == pacemaker_preflight_iface['prefix'] | int
+      - >-
+        (pacemaker_vip_cidr | ansible.utils.ipaddr('network/prefix'))
+        == pacemaker_preflight_iface_net
+    fail_msg: >-
+      {{ inventory_hostname }} : VIP {{ pacemaker_vip_cidr }} (réseau
+      {{ pacemaker_vip_cidr | ansible.utils.ipaddr('network/prefix') }}) hors
+      du réseau de {{ pacemaker_vip_nic }}
+      ({{ pacemaker_preflight_iface['address'] }}/{{
+      pacemaker_preflight_iface['prefix'] }}, réseau
+      {{ pacemaker_preflight_iface_net }}). IPaddr2 ne le détecterait pas
+      (F-14). Corriger pacemaker_vip_cidr (adresse et préfixe) ou
+      pacemaker_vip_nic.
+    quiet: true
+  vars:
+    pacemaker_preflight_iface: >-
+      {{ ansible_facts[pacemaker_preflight_nic_key]['ipv4'] }}
+    pacemaker_preflight_iface_net: >-
+      {{ (pacemaker_preflight_iface['address'] ~ '/'
+      ~ pacemaker_preflight_iface['prefix'])
+      | ansible.utils.ipaddr('network/prefix') }}
+
+# N4. La VIP ne doit être l'adresse principale d'aucun nœud. Chaque nœud
+# vérifie la sienne ; any_errors_fatal arrête les deux.
+- name: N4 | VIP différente de l'adresse principale du nœud
+  ansible.builtin.assert:
+    that:
+      - >-
+        pacemaker_preflight_vip_ip
+        != ansible_facts[pacemaker_preflight_nic_key]['ipv4']['address']
+      - >-
+        pacemaker_preflight_vip_ip
+        != (ansible_facts['default_ipv4']['address'] | default(''))
+    fail_msg: >-
+      {{ inventory_hostname }} : la VIP {{ pacemaker_preflight_vip_ip }} est
+      l'adresse principale du nœud (interface {{ pacemaker_vip_nic }} ou route
+      par défaut). Choisir une adresse libre pour pacemaker_vip_cidr.
+    quiet: true
+
+# N7 (D10, D20, R1 et R-29 du L3a). Nom de nœud = inventory_hostname (D20) :
+# corosync identifie le nœud local en comparant uname -n au « name » du
+# nodelist, et sinon passe par une résolution inverse des adresses locales
+# (corosync exec/totemconfig.c:721-860). ansible_facts['nodename'] =
+# platform.node() (AC/module_utils/facts/system/platform.py:56), soit le
+# nodename d'uname ; « hostname » n'en garde que la partie avant le premier
+# point (l.55), d'où la comparaison exacte avec nodename.
+# pacemaker_node_ip doit être l'IPv4 PRINCIPALE de pacemaker_vip_nic :
+# ansible_facts[<nic>]['ipv4'] vient de « ip addr show primary dev <nic> »
+# (AC/module_utils/facts/network/linux.py:191-192,263-266) ; les adresses
+# secondaires, dont la VIP posée par IPaddr2 dans le même réseau, sont dans
+# ipv4_secondaries (l.199-214, 275-276). La garde reste donc juste quand le
+# nœud porte la VIP (repro L3b).
+- name: N7 | Nom de nœud et adresse du nœud conformes
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == ansible_facts['nodename']
+      - >-
+        pacemaker_node_ip
+        == ansible_facts[pacemaker_preflight_nic_key]['ipv4']['address']
+    fail_msg: >-
+      {{ inventory_hostname }} :
+      {{ ('uname -n vaut « ' ~ ansible_facts['nodename'] ~ ' » : le nom'
+      ~ " d'inventaire doit être exactement le nom du nœud (D20), car"
+      ~ ' corosync se reconnaît par ce nom (sinon résolution inverse).'
+      ~ " Renommer l'hôte dans <inventaire hors dépôt>/hosts.yml et y placer"
+      ~ " l'adresse SSH dans ansible_host.")
+      if inventory_hostname != ansible_facts['nodename']
+      else ('pacemaker_node_ip = ' ~ pacemaker_node_ip ~ ", alors que l'IPv4"
+      ~ ' principale de ' ~ pacemaker_vip_nic ~ ' est '
+      ~ ansible_facts[pacemaker_preflight_nic_key]['ipv4']['address']
+      ~ ' (secondaires : '
+      ~ (ansible_facts[pacemaker_preflight_nic_key]['ipv4_secondaries']
+      | default([]) | map(attribute='address') | join(', ')
+      | default('aucune', true)) ~ ').'
+      ~ ' Corriger pacemaker_node_ip dans <inventaire hors dépôt>/hosts.yml'
+      ~ ' (D10).') }}
+    quiet: true
+
+# N5. VIP déjà portée par un de nos nœuds (adresse secondaire) : cluster
+# existant présumé, la détection de doublon est sautée.
+- name: N5 | Nœuds du cluster qui portent déjà la VIP
+  ansible.builtin.set_fact:
+    pacemaker_preflight_vip_holders: >-
+      {{ ansible_play_hosts
+      | zip(ansible_play_hosts
+      | map('extract', hostvars, ['ansible_facts', 'all_ipv4_addresses']))
+      | selectattr('1', 'contains', pacemaker_preflight_vip_ip)
+      | map('first') | list }}
+
+- name: N5 | VIP déjà portée par un nœud du cluster, détection de doublon sautée
+  ansible.builtin.debug:
+    msg: >-
+      VIP {{ pacemaker_preflight_vip_ip }} déjà portée par
+      {{ pacemaker_preflight_vip_holders | join(', ') }} : cluster existant
+      présumé, détection d'adresse dupliquée sautée.
+  when: pacemaker_preflight_vip_holders | length > 0
+
+# arping (iputils-20210202, OL9) en mode DAD (-D) : sonde ARP de source
+# 0.0.0.0, rien n'est annoncé. Code retour (man arping -D ; arping.c:300-301,
+# 822-824) : 0 si aucune réponse, 1 si l'adresse répond. Piège : sur une
+# interface sans ARP (loopback, NOARP), -D sort en 0 sans rien envoyer
+# (arping.c:562-570,1006-1009). La garde exige donc aussi « Sent N probes »
+# avec N >= 1 et « Received 0 response ».
+- name: N5 | Détection d'adresse dupliquée (arping -D)
+  ansible.builtin.command:
+    argv:
+      - arping
+      - -D
+      - -c
+      - "2"
+      - -I
+      - "{{ pacemaker_vip_nic }}"
+      - "{{ pacemaker_preflight_vip_ip }}"
+  environment:
+    LC_ALL: C
+  register: pacemaker_preflight_arping
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: pacemaker_preflight_vip_holders | length == 0
+
+- name: N5 | VIP libre sur le réseau
+  ansible.builtin.assert:
+    that:
+      - pacemaker_preflight_arping.rc == 0
+      - >-
+        pacemaker_preflight_arping.stdout
+        is regex('^Sent [1-9][0-9]* probes', multiline=true)
+      - >-
+        pacemaker_preflight_arping.stdout
+        is regex('^Received 0 response', multiline=true)
+    fail_msg: >-
+      {{ inventory_hostname }} :
+      {{ ('la VIP ' ~ pacemaker_preflight_vip_ip ~ ' répond déjà sur '
+      ~ pacemaker_vip_nic ~ ' : elle est utilisée par une autre machine.'
+      ~ ' Choisir une adresse libre.')
+      if (pacemaker_preflight_arping.rc == 1
+      and pacemaker_preflight_arping.stdout
+      is regex('^Received [1-9]', multiline=true))
+      else ('détection de doublon impossible (rc='
+      ~ pacemaker_preflight_arping.rc ~ ').') }}
+      Sortie :
+      {{ pacemaker_preflight_arping.stdout_lines | default([]) | join(' / ') }}
+      {{ pacemaker_preflight_arping.stderr | default('') }}
+    quiet: true
+  when: pacemaker_preflight_vip_holders | length == 0
+
+# N6 (R-05, F-04, F-05, F-17, P-12). Le rôle n'active aucun dépôt sur OL9
+# (__ha_cluster_repos: [], F-04) : les paquets qu'il installe doivent être
+# disponibles dans les dépôts déjà activés.
+- name: N6 | Paquets du rôle ha_cluster disponibles dans les dépôts activés
+  vars:
+    # Paquets installés par le rôle sur OL9 x86_64 (F-05) :
+    # LSR/vars/RedHat.yml:13-24 (essentiels et pile complète). Les paquets de
+    # fencing (fence-agents-all, fence-virt, l.48) ne viennent que du défaut
+    # de ha_cluster_fence_agent_packages (LSR/defaults/main.yml:17,
+    # LSR/tasks/main.yml:58-61), que cluster.yml fixe à [] (D19).
+    pacemaker_preflight_packages:
+      - pcs
+      - corosync-qnetd
+      - openssl
+      - corosync
+      - libknet1-plugins-all
+      - resource-agents
+      - pacemaker
+  block:
+    - name: N6 | Interroger les dépôts activés (dnf repoquery)
+      ansible.builtin.command:
+        argv: >-
+          {{ ['dnf', '--quiet', 'repoquery', '--available',
+          '--queryformat', '%{name}'] + pacemaker_preflight_packages }}
+      register: pacemaker_preflight_repoquery
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: N6 | Lister les dépôts activés
+      ansible.builtin.command:
+        argv:
+          - dnf
+          - --quiet
+          - repolist
+          - --enabled
+      register: pacemaker_preflight_repolist
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: N6 | Tous les paquets sont disponibles
+      ansible.builtin.assert:
+        that:
+          - pacemaker_preflight_repoquery.rc == 0
+          - >-
+            pacemaker_preflight_packages
+            | difference(pacemaker_preflight_repoquery.stdout_lines)
+            | length == 0
+        fail_msg: >-
+          {{ inventory_hostname }} :
+          {{ ('dnf repoquery en échec (rc='
+          ~ pacemaker_preflight_repoquery.rc ~ ') : '
+          ~ pacemaker_preflight_repoquery.stderr)
+          if pacemaker_preflight_repoquery.rc != 0
+          else ('paquets introuvables dans les dépôts activés : '
+          ~ (pacemaker_preflight_packages
+          | difference(pacemaker_preflight_repoquery.stdout_lines)
+          | join(', '))) }}.
+          Dépôts activés :
+          {{ pacemaker_preflight_repolist.stdout_lines | default([])
+          | join(' / ') }}.
+          Dépôts Oracle (F-17) : pcs, corosync-qnetd, libknet1-plugins-all et
+          resource-agents seulement dans ol9_addons ; pacemaker et corosync
+          dans ol9_addons et ol9_appstream ; openssl dans ol9_baseos_latest et
+          ol9_appstream.
+          Le rôle n'active aucun dépôt sur OL9 (F-04) :
+          activer sur le nœud ces dépôts ou leurs équivalents du miroir interne
+          (doc Oracle : dnf config-manager --enable ol9_appstream
+          ol9_baseos_latest ol9_addons ; P-12).
+        quiet: true

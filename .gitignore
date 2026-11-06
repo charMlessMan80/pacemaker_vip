@@ -1,0 +1,18 @@
+# Collections installées par ansible-galaxy (reconstruites depuis collections/requirements.yml)
+/collections/ansible_collections/
+
+# Fichiers de mot de passe Vault : ne jamais versionner
+.vault_pass*
+*.vault_pass
+vault_password*
+
+# Artefacts Ansible / outils
+*.retry
+.ansible/
+__pycache__/
+*.pyc
+
+# Inventaires réels : TOUJOURS hors du dépôt (dépôt longtemps public, D23 ;
+# CLAUDE.md §5). Seul le modèle inventories/example/ est versionné.
+inventories/*
+!inventories/example/
