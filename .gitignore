@@ -12,7 +12,7 @@ vault_password*
 __pycache__/
 *.pyc
 
-# Inventaires réels : TOUJOURS hors du dépôt (dépôt longtemps public, D23 ;
-# CLAUDE.md §5). Seul le modèle inventories/example/ est versionné.
+# Inventaires réels : TOUJOURS hors du dépôt (dépôt public, D26 ;
+# CLAUDE.md §5 et §19). Seul le modèle inventories/example/ est versionné.
 inventories/*
 !inventories/example/
