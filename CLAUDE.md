@@ -87,8 +87,8 @@ Abréviations de sources :
   Il n'est jamais versionné : `.gitignore` ignore `inventories/*` sauf le modèle
   `inventories/example/` (preuve `git check-ignore -v`, L4b). `ansible.cfg` fixe
   `inventory = /dev/null`.
-- **Raison (hors dépôt)** : le dépôt a été public jusqu'au 2026-11-06 (D23) ;
-  un `git add -A` sur le contrôleur publierait noms, adresses et fichier Vault.
+- **Raison (hors dépôt)** : le dépôt est **public** (D26) ; un `git add -A` sur
+  le contrôleur publierait noms, adresses et fichier Vault (§19).
 - **Raison** : sans réglage, c'est `/etc/ansible/hosts` qui est utilisé
   (`AC/config/base.yml:729-740`). Une valeur vide est résolue en chemin relatif au
   `.cfg` : la racine du dépôt devient l'inventaire (repro L1, F-21).
@@ -345,3 +345,20 @@ Abréviations de sources :
 - **Raison** : sans cette règle, chaque revue ajoute des couches contre des
   contournements volontaires, qui compliquent les gardes sans réduire le risque
   réel (décision utilisateur du 2026-11-06).
+
+## 19. Aucune donnée d'infrastructure réelle dans le dépôt (D26)
+
+- **Règle** : le dépôt est **public**. Il ne contient aucune donnée
+  d'infrastructure réelle, ni dans l'arbre ni dans l'historique : pas de nom
+  d'hôte, d'adresse IP, de domaine ni de chemin réel du contrôleur ou des nœuds,
+  y compris dans les messages de commit. Les constats sur cible sont consignés
+  avec les marqueurs `<contrôleur>`, `<nœud-1>`, `<nœud-2>`, `<IP nœud 1>`,
+  `<IP nœud 2>`, `<IP contrôleur>`, `<domaine interne>`, `<répertoire hors dépôt>`.
+  Les vraies valeurs n'existent que dans l'inventaire hors dépôt (§5). Avant
+  chaque commit, chercher ces valeurs dans `git diff --cached` ; la table de
+  correspondance n'est jamais versionnée.
+- **Raison** : le contrôleur doit pouvoir faire `git clone` sans identifiant
+  (SSH sortant bloqué, aucun identifiant du compte personnel sur le root du
+  contrôleur), donc le dépôt est public (décision utilisateur du 2026-11-06,
+  remplace D23). L'historique a été réécrit une fois pour retirer ces valeurs
+  (L5) ; une nouvelle fuite imposerait une nouvelle réécriture.
