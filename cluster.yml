@@ -132,11 +132,31 @@
     - name: C5 - variables du rôle telles que déclarées
       ansible.builtin.include_tasks: tasks/declared_vars.yml
 
+    # L4c. Condition des tâches qui MODIFIENT les nœuds (D21 et le rôle).
+    # --start-at-task saute tout ce qui précède la tâche nommée, preflight,
+    # G6, garde sans tag et C5 compris (F-64). Une reprise du type
+    # « --start-at-task <tâche du rôle> --limit <un nœud> » déploierait alors
+    # un corosync.conf à 1 nœud et redémarrerait le cluster (F-06, F-08).
+    # Un when posé ici est hérité par chaque tâche (y compris celles des
+    # include_tasks du rôle) et réévalué à chaque tâche, même quand le run
+    # commence au milieu (F-68). Le saut n'est jamais silencieux : le
+    # marqueur absent fait échouer l'assert en tête de tasks/verify.yml.
+    # import_tasks (statique) et non include_tasks : sinon --start-at-task
+    # ne trouve pas les tâches D21 (« No matching task », rc=0, F-68).
     - name: D21 - répertoire d'état de pcsd
-      ansible.builtin.include_tasks: tasks/pcsd_state_dir.yml
+      ansible.builtin.import_tasks: tasks/pcsd_state_dir.yml
+      when: &pacemaker_nodes_change_ok
+        - pacemaker_preflight_passed | default(false) is sameas true
+        - (ansible_play_hosts_all | sort) == (groups['pacemaker_nodes'] | sort)
+        - not (ansible_check_mode | bool)
 
   roles:
+    # when sur l'entrée roles: (et non import_role sous tasks:) : même
+    # position dans le play, même vidage des handlers ; le when est copié
+    # sur le rôle (AC/playbook/role/definition.py:205-229,
+    # AC/playbook/role/__init__.py:201-204) puis hérité (F-68).
     - role: fedora.linux_system_roles.ha_cluster
+      when: *pacemaker_nodes_change_ok
 
   post_tasks:
     - name: V1-V6 - état du cluster après déploiement (lecture seule)

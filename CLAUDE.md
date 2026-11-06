@@ -156,7 +156,8 @@ Abréviations de sources :
   (`-e`), G13c et garde sans tag (`--check`), C4, G6, C1 ; `--skip-tags always`,
   `--start-at-task` et `--step` sautent tout le preflight : la garde sans tag de
   `cluster.yml` (marqueur absent, `--skip-tags`) et l'assert du marqueur en tête de
-  `tasks/verify.yml` les arrêtent, au pire en fin de run (§14.5). Résidu :
+  `tasks/verify.yml` les arrêtent ; D21 et le rôle, conditionnés au preflight
+  complet, sont alors sautés (§14.5, §14.7). Résidu :
   `--skip-tags always,untagged` n'exécute rien et rend 0, sans effet sur les nœuds.
 - **Raison** : si corosync.conf ou une authkey change, le rôle arrête `pacemaker` et
   `corosync` sur **tous** les nœuds à la fois, puis les redémarre
@@ -236,6 +237,16 @@ Abréviations de sources :
     `--start-at-task` saute tout ce qui précède la tâche nommée, tag `always`
     compris, et aucune variable n'expose l'option
     (`AC/executor/play_iterator.py:207-227`, `AC/utils/vars.py:216-223`, repro L4).
+- **Règle 14.7** (L4c) : toute tâche de `cluster.yml` qui modifie les nœuds (D21,
+  rôle `ha_cluster`) porte le `when` ancré `pacemaker_nodes_change_ok` : marqueur
+  présent, `ansible_play_hosts_all` égal au groupe `pacemaker_nodes`, pas de
+  `--check`. D21 est importé (`import_tasks`), pas inclus.
+  - **Raison** : sans cette condition, une reprise `--start-at-task <tâche du rôle>
+    --limit <un nœud>` déploierait un corosync.conf à 1 nœud et redémarrerait le
+    cluster avant tout échec (F-06, F-08). Le `when` d'un rôle ou d'un import est
+    hérité par chaque tâche et réévalué même quand le run commence au milieu ; une
+    tâche d'un `include_tasks` n'est pas trouvable par `--start-at-task` (F-68,
+    repro L4c). Le saut est suivi de l'échec du marqueur dans `tasks/verify.yml`.
 - **Règle 14.6** : une garde lit les options de lancement dans les magic vars
   (`ansible_run_tags`, `ansible_skip_tags`, `ansible_check_mode`, `ansible_limit`,
   `ansible_diff_mode`, `ansible_verbosity`), jamais dans une variable qu'un `-e`

@@ -182,9 +182,10 @@ Jamais `-v`, `--check`, `--diff`, `--limit`, `--tags`, `--skip-tags`,
 gardes C1, G13c, C4, G6, G13a, G13b, garde sans tag, marqueur). Un premier
 déploiement ne se simule pas en `--check` (R-28). Le rôle n'a aucun tag : sans G13a,
 `--tags <x>` terminerait en rc=0 après le seul preflight (R-35). Pour reprendre un run
-interrompu, relancer la commande complète, jamais `--start-at-task` : le preflight,
-C5 et D21 seraient sautés, et le run échouerait sur le marqueur en tête des
-vérifications, après le rôle.
+interrompu, relancer la commande complète, jamais `--start-at-task` : le preflight
+et C5 seraient sautés ; D21 et le rôle, conditionnés au preflight complet du même
+run (sinon une reprise avec `--limit` redéploierait un cluster à 1 nœud), seraient
+sautés eux aussi, et le run échouerait sur le marqueur en tête des vérifications.
 
 Résultat attendu : `failed=0` partout et V1-V6 `ok`. V1-V6 garantissent, au moment de
 la vérification, ce qui est listé ci-dessus. Elles ne garantissent pas la bascule

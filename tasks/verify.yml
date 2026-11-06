@@ -26,8 +26,9 @@
 # --start-at-task (reprise d'un run), toutes les tâches qui précèdent la
 # tâche nommée sont sautées, tag always compris, et aucune variable n'expose
 # l'option (AC/executor/play_iterator.py:207-227, AC/utils/vars.py:216-223 ;
-# repro L4) : le preflight, C5 et D21 ne s'exécutent pas. Le run échoue
-# alors ici, au pire en fin de run, au lieu de finir en rc=0.
+# repro L4) : le preflight, C5 et D21 ne s'exécutent pas. Les tâches qui
+# modifient les nœuds (D21, rôle) sont alors sautées par leur condition
+# (cluster.yml, L4c) ; ce saut ne doit pas finir en rc=0 : le run échoue ici.
 - name: Preflight passé dans ce run (marqueur)
   ansible.builtin.assert:
     that:
@@ -35,9 +36,10 @@
     fail_msg: >-
       {{ inventory_hostname }} : le preflight n'a pas été exécuté jusqu'au
       bout dans ce run (marqueur pacemaker_preflight_passed absent :
-      --start-at-task, --step ou --skip-tags ?). Le déploiement qui précède
-      n'a pas été gardé. Relancer cluster.yml en entier, sans
-      --start-at-task, --step ni --skip-tags (CLAUDE.md §9).
+      --start-at-task, --step ou --skip-tags ?). Les tâches qui modifient
+      les nœuds (D21, rôle ha_cluster) ont donc été sautées. Relancer
+      cluster.yml en entier, sans --start-at-task, --step ni --skip-tags
+      (CLAUDE.md §9).
     quiet: true
 
 - name: V1-V6
