@@ -5,7 +5,7 @@ portant une ressource VIP unique, avec le rôle `ha_cluster` de
 `fedora.linux_system_roles` 1.88.9.
 
 > État : socle (L1), preflight (L2), preflight étendu (L3b), playbook cluster + VIP
-> (L3c) et corrections de revue (L4b) livrés. Le playbook cluster est **validé sur cible
+> (L3c), corrections de revue (L4b, L4c) et publication du dépôt (L5, L5b) livrés. Le playbook cluster est **validé sur cible
 > (acc, 2026-11-10)** : premier déploiement sur nœuds vierges, second passage à
 > l'identique, redémarrage propre du nœud porteur (D11). **Non testé** : arrêt brutal
 > d'un nœud, changements de configuration.
