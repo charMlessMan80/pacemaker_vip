@@ -247,6 +247,10 @@ Un nœud à la fois :
    `crm_mon -1 --include=failcounts` ; en cas d'échec ancien, `pcs resource cleanup vip`.
 5. Seulement ensuite, l'autre nœud.
 
+Coupure attendue de la VIP : environ 8,3 s en cas de panne brutale d'un nœud,
+acceptée (D27), contre 0,4 s en arrêt propre (C-19) ; les délais totem restent aux
+défauts de corosync (CLAUDE.md §9, règle 9.2).
+
 Si les deux nœuds sont arrêtés, le premier qui démarre devient quorate seul et démarre
 la VIP (23 à 25 s en repro, F-59), même si l'autre est vivant mais injoignable (D8, risque
 accepté).

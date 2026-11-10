@@ -164,6 +164,21 @@ Abréviations de sources :
   (`LSR/tasks/shell_pcs/cluster-start-and-reload.yml:24-42`). La VIP est coupée
   (L0 Q2, F-08 ; repro L3c : `wait_for_all` modifié, tâche « Stop cluster daemons »
   en `changed` sur les 2 nœuds).
+- **Règle 9.2 (délais totem, D27)** : les délais totem (`token`, `consensus` et
+  apparentés : `token_retransmit`, `token_coefficient`, `join`…) ne sont ni déclarés
+  ni modifiés dans `cluster.yml` (variable `ha_cluster_totem`, `{}` par défaut :
+  `LSR/defaults/main.yml:31`, émise dans corosync.conf par
+  `LSR/tasks/shell_pcs/pcs-cluster-setup-pcs-0.10.yml:49-51`) sans **nouvelle
+  décision de l'utilisateur et** un test d'arrêt brutal du nœud porteur en acc,
+  avec mesure de la coupure de la VIP (comme C-22). Ils restent aux défauts de
+  corosync 3.1.10 : `token` 3000 ms, `consensus` 3600 ms (C-21).
+  - **Raison** : avec ces défauts, la panne brutale d'un nœud coupe la VIP environ
+    8,3 s (C-22, contre 0,4 s en arrêt propre, C-19) ; coupure acceptée (D27).
+    Réduire `token` raccourcirait la coupure, mais sur Hyper-V sans fencing (D2), un
+    gel temporaire d'une VM (migration à chaud, sauvegarde) plus long que `token`
+    serait pris pour une panne et pourrait dupliquer la VIP (analyse non mesurée,
+    D27). Enfin, une modification de totem change corosync.conf : le rôle arrête et
+    redémarre tout le cluster, sur les deux nœuds à la fois (règle ci-dessus, F-08).
 
 ## 10. L'idempotence se teste sur l'état, pas sur le compteur `changed`
 
