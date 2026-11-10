@@ -7,8 +7,9 @@ portant une ressource VIP unique, avec le rôle `ha_cluster` de
 > État : socle (L1), preflight (L2), preflight étendu (L3b), playbook cluster + VIP
 > (L3c), corrections de revue (L4b, L4c) et publication du dépôt (L5, L5b) livrés. Le playbook cluster est **validé sur cible
 > (acc, 2026-11-10)** : premier déploiement sur nœuds vierges, second passage à
-> l'identique, redémarrage propre du nœud porteur (D11). **Non testé** : arrêt brutal
-> d'un nœud, changements de configuration.
+> l'identique, redémarrage propre du nœud porteur (D11). Arrêt brutal du nœud porteur
+> testé sur cible (acc, 2026-11-10) : interruption de 8,3 s, retour du nœud sans
+> incident. **Non testé** : changements de configuration.
 >
 > **Aucun fencing n'est configuré** (décision D2). Un split-brain peut donc rendre la
 > VIP active sur les deux nœuds, et cette configuration n'est pas supportée par
@@ -169,8 +170,9 @@ les jetons pcsd (accepté).
 
 > **Validé en repro conteneur (2 nœuds OL9 systemd, rôle réellement exécuté), puis
 > validé sur cible (acc, 2026-11-10)** pour le premier déploiement, le second passage
-> et le redémarrage propre d'un nœud (D11). **Non testé** : arrêt brutal d'un nœud
-> (VM coupée), changements de configuration. Les durées indiquées viennent de la
+> et le redémarrage propre d'un nœud (D11). Arrêt brutal d'un nœud (VM coupée) testé
+> sur cible (acc, 2026-11-10) : interruption de 8,3 s, retour du nœud sans incident.
+> **Non testé** : changements de configuration. Les durées indiquées viennent de la
 > repro, sauf mention « sur cible ».
 
 ### Premier déploiement
@@ -235,8 +237,9 @@ Un nœud à la fois :
 2. Redémarrer le nœud. S'il porte la VIP, elle passe sur l'autre (1 à 2 s en
    repro, avec un arrêt propre, F-58). Validé sur cible (acc, 2026-11-10) avec
    `systemctl reboot` du porteur : plus longue interruption vue du contrôleur 0,4 s
-   (ping toutes les 0,2 s). **Non testé** : arrêt brutal du porteur (VM coupée), où
-   la bascule attend que corosync détecte la perte du nœud.
+   (ping toutes les 0,2 s). Arrêt brutal du porteur (VM coupée, « Turn Off » dans
+   Hyper-V) testé sur cible (acc, 2026-11-10) : interruption de 8,3 s, retour du
+   nœud sans incident (la VIP reste sur l'autre nœud).
 3. Attendre son retour : `crm_mon -1` (deux nœuds `Online`) et
    `corosync-quorumtool -s` (`Flags: 2Node Quorate`).
 4. La VIP **ne revient pas** sur le nœud redémarré (stickiness 1 ; validé sur cible,
