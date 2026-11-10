@@ -123,7 +123,9 @@ exemple `<répertoire hors dépôt>/pacemaker_vip/`), nommer chaque hôte exacte
 `pacemaker_node_ip` par hôte et `group_vars/pacemaker_nodes.yml`, et définir
 `vault_pacemaker_hacluster_password` dans un fichier chiffré par `ansible-vault`
 chargé pour le groupe `pacemaker_nodes`. Le fichier de mot de passe Vault reste hors
-du dépôt. Aucune variable du projet dans `group_vars/all` (G13b).
+du dépôt. Aucune variable du projet dans `group_vars/all` (G13b). Le dépôt est
+**public** : n'y écrire aucun nom d'hôte, adresse, domaine ni chemin réel, même dans
+un message de commit ; ces valeurs ne vivent que dans l'inventaire hors dépôt (D26).
 
 ## Playbook cluster (`cluster.yml`)
 
