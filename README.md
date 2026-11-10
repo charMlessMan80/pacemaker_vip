@@ -5,8 +5,10 @@ portant une ressource VIP unique, avec le rôle `ha_cluster` de
 `fedora.linux_system_roles` 1.88.9.
 
 > État : socle (L1), preflight (L2), preflight étendu (L3b), playbook cluster + VIP
-> (L3c) et corrections de revue (L4b) livrés. Le playbook cluster est **validé en repro conteneur uniquement, à
-> valider sur cible** (premier déploiement réel non encore fait).
+> (L3c), corrections de revue (L4b, L4c) et publication du dépôt (L5, L5b) livrés. Le playbook cluster est **validé sur cible
+> (acc, 2026-11-10)** : premier déploiement sur nœuds vierges, second passage à
+> l'identique, redémarrage propre du nœud porteur (D11). **Non testé** : arrêt brutal
+> d'un nœud, changements de configuration.
 >
 > **Aucun fencing n'est configuré** (décision D2). Un split-brain peut donc rendre la
 > VIP active sur les deux nœuds, et cette configuration n'est pas supportée par
@@ -165,8 +167,11 @@ les jetons pcsd (accepté).
 
 ## Exploitation
 
-> **Validé en repro conteneur (2 nœuds OL9 systemd, rôle réellement exécuté), à valider
-> sur cible.** Les durées indiquées viennent de la repro.
+> **Validé en repro conteneur (2 nœuds OL9 systemd, rôle réellement exécuté), puis
+> validé sur cible (acc, 2026-11-10)** pour le premier déploiement, le second passage
+> et le redémarrage propre d'un nœud (D11). **Non testé** : arrêt brutal d'un nœud
+> (VM coupée), changements de configuration. Les durées indiquées viennent de la
+> repro, sauf mention « sur cible ».
 
 ### Premier déploiement
 
@@ -195,9 +200,11 @@ la vérification, ce qui est listé ci-dessus. Elles ne garantissent pas la basc
 (aucun fencing, D2).
 
 Le rôle signale toujours `changed` : un second passage sans changement de variables ne
-doit pas toucher corosync.conf ni la VIP. En repro, la tâche « Stop cluster daemons to
-reload configuration » est sautée, corosync.conf et la CIB sont identiques, et la VIP
-n'est ni arrêtée ni déplacée.
+doit pas toucher corosync.conf ni la VIP. Validé sur cible (acc, 2026-11-10) : la tâche
+« Stop cluster daemons to reload configuration » est sautée sur les 2 nœuds,
+corosync.conf et la CIB sont identiques (sha256), et la ligne `crm_mon` de la VIP est
+inchangée. En repro, l'historique d'opérations de la VIP est en plus inchangé (ni
+arrêt ni déplacement).
 
 ### Changement de configuration
 
@@ -226,10 +233,14 @@ Un nœud à la fois :
 1. Repérer le porteur de la VIP et vérifier que l'autre nœud est en ligne :
    `crm_mon -1` (les deux nœuds `Online`).
 2. Redémarrer le nœud. S'il porte la VIP, elle passe sur l'autre (1 à 2 s en
-   repro, avec un arrêt propre, F-58).
+   repro, avec un arrêt propre, F-58). Validé sur cible (acc, 2026-11-10) avec
+   `systemctl reboot` du porteur : plus longue interruption vue du contrôleur 0,4 s
+   (ping toutes les 0,2 s). **Non testé** : arrêt brutal du porteur (VM coupée), où
+   la bascule attend que corosync détecte la perte du nœud.
 3. Attendre son retour : `crm_mon -1` (deux nœuds `Online`) et
    `corosync-quorumtool -s` (`Flags: 2Node Quorate`).
-4. La VIP **ne revient pas** sur le nœud redémarré (stickiness 1). Vérifier
+4. La VIP **ne revient pas** sur le nœud redémarré (stickiness 1 ; validé sur cible,
+   acc, 2026-11-10). Vérifier
    `crm_mon -1 --include=failcounts` ; en cas d'échec ancien, `pcs resource cleanup vip`.
 5. Seulement ensuite, l'autre nœud.
 
